@@ -7,12 +7,14 @@
  * schema has no key for it). DEFAULT_POLICY is what runs when no admin override
  * exists, and what the store falls back to when the database is down.
  */
-import { TIER_POLICIES, TIERS, type Tier } from '@media/shared';
+import { TIER_POLICIES, TIERS, type IneligibleCode, type Tier } from '@media/shared';
 import { PLATFORM_IDS, type PlatformId, type PlatformPolicy, type SoftPolicy, type TierSoftKey } from './policy.schema.js';
 
-// Phase 2.1 moves this union to @media/shared (INELIGIBLE_CODES); until then
-// only the codes the floor refuses are needed here.
-export type HardRefuseCode = 'SOURCE_PRIVATE' | 'SOURCE_MEMBERS_ONLY' | 'SOURCE_NEEDS_LOGIN' | 'SOURCE_DRM';
+/** The refusal codes the floor always applies (the codes themselves live in @media/shared). */
+export type HardRefuseCode = Extract<
+  IneligibleCode,
+  'SOURCE_PRIVATE' | 'SOURCE_MEMBERS_ONLY' | 'SOURCE_NEEDS_LOGIN' | 'SOURCE_DRM'
+>;
 
 export const HARD_FLOOR: Readonly<{
   refuse: readonly HardRefuseCode[];
