@@ -6,6 +6,8 @@ import { z } from 'zod';
 import { AUDIO_FORMATS, type AudioFormat } from '@media/shared';
 import { env } from '../config/env.js';
 import { prisma } from '../lib/prisma.js';
+import { redis } from '../lib/redis.js';
+import { assertStorageAvailable, gbToBytes, readStorageUsage } from '../features/maintenance/index.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { asyncHandler } from '../middleware/error-handler.js';
@@ -65,6 +67,8 @@ router.post(
 
     // Maintenance and the downloads switch come first: nothing below may spend quota.
     assertDownloadsOpen();
+    // Measured by the worker after each sweep/job; refuse before any quota is reserved.
+    assertStorageAvailable(await readStorageUsage(redis), gbToBytes(env.STORAGE_MAX_GB));
 
     const record = await extractMedia(input.url);
     const format = findFormat(record, input.formatId);
@@ -136,7 +140,7 @@ router.post(
         ...(input.subtitleLang ? { subtitleLang: input.subtitleLang } : {}),
         ipHash: req.identity.ipHash,
         userAgent: req.header('user-agent') ?? null,
-      });
+      }, record.region ?? null);
 
       await recordAudit({
         userId: req.identity.userId,
@@ -193,7 +197,7 @@ router.post(
     }
 
     // Remove it if it has not started; otherwise set the flag the worker polls.
-    const removed = await removeQueuedJob(row.id);
+    const removed = await removeQueuedJob(row.id, row.region);
     await requestCancellation(row.id);
 
     if (removed) {

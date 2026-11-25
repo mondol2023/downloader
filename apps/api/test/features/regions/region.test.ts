@@ -11,16 +11,35 @@ const cfg: RegionConfig = {
   COUNTRY_HEADER: 'cf-ipcountry',
   COUNTRY_TO_REGION: { BD: 'bd', IN: 'in', DE: 'eu', US: 'us' },
   TRUST_PROXY: true,
+  TRUSTED_PROXY_CIDRS: ['10.0.0.0/8', '2001:db8::/32', '203.0.113.7'],
 };
 
-const req = (country?: string) => ({
+const req = (country?: string, peer = '10.1.2.3') => ({
   headers: country === undefined ? {} : { 'cf-ipcountry': country },
   ip: '203.0.113.9',
+  socket: { remoteAddress: peer },
 });
 
 describe('resolveUserRegion', () => {
   it('ignores the country header when TRUST_PROXY is false', () => {
     expect(resolveUserRegion(req('BD'), { ...cfg, TRUST_PROXY: false })).toBeNull();
+  });
+
+  it('honours the header from a trusted peer (CIDR, IPv6 CIDR, exact IP, IPv4-mapped)', () => {
+    expect(resolveUserRegion(req('BD', '10.9.9.9'), cfg)).toBe('bd');
+    expect(resolveUserRegion(req('BD', '2001:db8::5'), cfg)).toBe('bd');
+    expect(resolveUserRegion(req('BD', '203.0.113.7'), cfg)).toBe('bd');
+    expect(resolveUserRegion(req('BD', '::ffff:10.1.2.3'), cfg)).toBe('bd');
+  });
+
+  it('ignores a spoofed header from an untrusted peer even with TRUST_PROXY=true', () => {
+    expect(resolveUserRegion(req('BD', '198.51.100.20'), cfg)).toBeNull();
+    expect(resolveUserRegion(req('BD', '::ffff:198.51.100.20'), cfg)).toBeNull();
+    expect(resolveUserRegion({ headers: { 'cf-ipcountry': 'BD' }, ip: '1.1.1.1' }, cfg)).toBeNull();
+  });
+
+  it('fails closed when TRUSTED_PROXY_CIDRS is empty', () => {
+    expect(resolveUserRegion(req('BD'), { ...cfg, TRUSTED_PROXY_CIDRS: [] })).toBeNull();
   });
 
   it('maps BD -> bd', () => {
@@ -30,7 +49,10 @@ describe('resolveUserRegion', () => {
   it('is case-insensitive on the country code and header name', () => {
     expect(resolveUserRegion(req('de'), cfg)).toBe('eu');
     expect(
-      resolveUserRegion({ headers: { 'CF-IPCountry': 'IN' } as never, ip: '1.1.1.1' }, cfg),
+      resolveUserRegion(
+        { headers: { 'CF-IPCountry': 'IN' } as never, ip: '1.1.1.1', socket: { remoteAddress: '10.0.0.1' } },
+        cfg,
+      ),
     ).toBe('in');
   });
 
@@ -42,7 +64,12 @@ describe('resolveUserRegion', () => {
   it('missing or malformed header -> null', () => {
     expect(resolveUserRegion(req(), cfg)).toBeNull();
     expect(resolveUserRegion(req(''), cfg)).toBeNull();
-    expect(resolveUserRegion({ headers: { 'cf-ipcountry': ['BD', 'IN'] }, ip: '1.1.1.1' }, cfg)).toBeNull();
+    expect(
+      resolveUserRegion(
+        { headers: { 'cf-ipcountry': ['BD', 'IN'] }, ip: '1.1.1.1', socket: { remoteAddress: '10.0.0.1' } },
+        cfg,
+      ),
+    ).toBeNull();
   });
 });
 

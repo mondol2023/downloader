@@ -169,6 +169,21 @@ describe('activatePolicyVersion (rollback)', () => {
     expect(prisma.rows.filter((r) => r.active).map((r) => r.version)).toEqual([1]);
   });
 
+  it('stop() waits for an in-flight refresh to finish its snapshot write', async () => {
+    const prisma = new FakePrisma();
+    const bus = new FakeRedisBus();
+    const a = build(prisma, bus);
+    const bPath = path.join(dir, 'b.snapshot.json');
+    const b = createPolicyStore({ prisma: prisma as never, redis: bus.client() as never, snapshotPath: bPath, pollMs: 0 });
+    await a.start();
+    await b.start();
+    await a.publish({ global: { maintenanceMode: true } }, 'v1', 'admin1');
+
+    await b.stop();
+
+    expect(JSON.parse(await readFile(bPath, 'utf8')).version).toBe(1);
+  });
+
   it('unknown version → 404 and nothing changes', async () => {
     const prisma = new FakePrisma();
     const store = build(prisma);

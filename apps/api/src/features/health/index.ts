@@ -8,6 +8,8 @@ export {
 } from './health.routes.js';
 export {
   assertEngineAvailable,
+  ensureEngineAvailable,
+  REPROBE_INTERVAL_MS,
   getToolVersions,
   initToolVersions,
   loadToolVersions,

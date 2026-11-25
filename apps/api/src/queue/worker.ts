@@ -1,6 +1,6 @@
 import { mkdir, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { DelayedError, Worker, type Job as BullJob } from 'bullmq';
+import { DelayedError, Queue, Worker, type Job as BullJob } from 'bullmq';
 import type { Job as JobRow, JobState as DbJobState } from '@prisma/client';
 import type { JobProgress, JobState, MediaFormat } from '@media/shared';
 import { isUnlimited } from '@media/shared';
@@ -12,6 +12,7 @@ import { createQueueConnection, disconnectRedis, redis } from '../lib/redis.js';
 import { CommandError, assertNotFlag, runCommand } from '../lib/exec.js';
 import { normaliseSourceUrl } from '../lib/source-url.js';
 import {
+  extractMediaDirect,
   extractMedia,
   findFormat,
   isIneligibleCode,
@@ -30,7 +31,20 @@ import {
 import { commitDownload, release, releaseSlot } from '../services/quota.service.js';
 import { assertDownloadsOpen, assertPlatformAllowed, tierPolicyFor } from '../features/restrictions/enforce.js';
 import { startPolicyStore, stopPolicyStore } from '../features/restrictions/policy.store.js';
-import { assertEngineAvailable, initToolVersions } from '../features/health/index.js';
+import { ensureEngineAvailable, initToolVersions } from '../features/health/index.js';
+import { isRegionalRegion, regionalQueueName } from '../features/regions/region.js';
+import {
+  ARTIFACT_SWEEP_JOB,
+  MAINTENANCE_QUEUE_NAME,
+  YTDLP_UPDATE_CHANNEL,
+  YTDLP_UPDATE_JOB,
+  directorySizeBytes,
+  runYtDlpSelfUpdate,
+  scheduleMaintenance,
+  startYtDlpUpdateListener,
+  sweepExpiredArtifacts,
+  writeStorageUsage,
+} from '../features/maintenance/index.js';
 import { MEDIA_QUEUE_NAME, type MediaJobPayload } from './queues.js';
 import { startRegionalExtractWorker } from './regional-queue.js';
 
@@ -98,6 +112,19 @@ let activeStandardJobs = 0;
 const connection = createQueueConnection('worker');
 
 /**
+ * What this process runs, from WORKER_ROLE and REGION:
+ *  - `download`: the media download worker. A regional VM (REGION other than `default`) consumes only
+ *    its own `media-jobs-<region>` queue, so a job that needed the user's region downloads there;
+ *    the main deployment consumes `media-jobs`.
+ *  - maintenance (sweep, storage gauge, scheduler) belongs to the main deployment's download worker
+ *    only: it is one tick per deployment, and the storage gauge describes the main volume.
+ *  - `extract`: the regional extraction worker (below). The yt-dlp update listener runs everywhere.
+ */
+const runsDownloads = env.WORKER_ROLE.includes('download');
+const mediaQueueName = regionalQueueName(MEDIA_QUEUE_NAME, env.REGION);
+const runsMaintenance = runsDownloads && !isRegionalRegion(env.REGION);
+
+/**
  * Engine binaries are probed once at boot (5 s timeout each). A missing tool is a startup
  * warning, not a crash: the worker keeps running and refuses jobs with ENGINE_UNAVAILABLE.
  * Jobs wait for the probe so the first one isn't refused against the empty initial snapshot.
@@ -107,8 +134,8 @@ const toolsReady = initToolVersions(
   logger,
 );
 
-const worker = new Worker<MediaJobPayload>(
-  MEDIA_QUEUE_NAME,
+const worker = runsDownloads ? new Worker<MediaJobPayload>(
+  mediaQueueName,
   async (job, token) => {
     await toolsReady;
     // Non-Pro work is capped below total capacity so the reserved slots stay
@@ -136,7 +163,7 @@ const worker = new Worker<MediaJobPayload>(
     stalledInterval: 60_000,
     maxStalledCount: 1,
   },
-);
+) : null;
 
 async function processMediaJob(job: BullJob<MediaJobPayload>): Promise<void> {
   const payload = job.data;
@@ -182,7 +209,7 @@ async function processMediaJob(job: BullJob<MediaJobPayload>): Promise<void> {
     }
 
     // The admin may have paused downloads or switched the site off since this was queued.
-    recheckPolicy(payload.sourceUrl);
+    await recheckPolicy(payload.sourceUrl);
 
     await transition(jobId, 'EXTRACTING', {
       startedAt: row.startedAt ?? new Date(),
@@ -215,7 +242,7 @@ async function processMediaJob(job: BullJob<MediaJobPayload>): Promise<void> {
 
     // yt-dlp's `--max-filesize` only knows the *declared* size, which many
     // extractors get wrong or omit. This is the check that actually holds.
-    const policy = tierPolicyFor(payload.tier);
+    const policy = tierPolicyFor(payload.tier, platformOf(payload.sourceUrl));
     if (!isUnlimited(policy.maxFileSizeBytes) && artifact.bytes > policy.maxFileSizeBytes) {
       await rm(workDir, { recursive: true, force: true });
       throw new UnrecoverableJobError(
@@ -320,9 +347,11 @@ async function processMediaJob(job: BullJob<MediaJobPayload>): Promise<void> {
  * downloads, or switched its platform off, fails with the same typed code the API would have
  * returned. It is permanent, so the reservation is released and the user is not charged.
  */
-function recheckPolicy(sourceUrl: string): void {
+async function recheckPolicy(sourceUrl: string): Promise<void> {
   try {
-    assertEngineAvailable(); // missing yt-dlp/ffmpeg → typed ENGINE_UNAVAILABLE, quota released
+    // A tool that probed null at boot is re-probed (throttled) before the job is refused.
+    await ensureEngineAvailable({ ytDlp: env.YTDLP_PATH, ffmpeg: env.FFMPEG_PATH, ffprobe: env.FFPROBE_PATH });
+    // missing yt-dlp/ffmpeg → typed ENGINE_UNAVAILABLE, quota released
     assertDownloadsOpen();
     const source = normaliseSourceUrl(sourceUrl); // also applies the platform and blocked-host rules
     assertPlatformAllowed(source.platform, 'download');
@@ -377,12 +406,15 @@ async function runYtDlp({ payload, format, workDir, jobId, signal, log }: RunArg
     throw new UnrecoverableJobError('That rendition is no longer selectable');
   }
 
-  const policy = tierPolicyFor(payload.tier);
+  const policy = tierPolicyFor(payload.tier, platformOf(payload.sourceUrl));
 
   const args = [
     '--no-warnings',
     '--no-playlist',
     '--no-call-home',
+    // Never fake X-Forwarded-For: geo-bypass would fetch from a region the user is not in.
+    '--xff',
+    'never',
     '--ignore-config',
     '--newline',
     '--retries',
@@ -669,11 +701,11 @@ async function report(
   });
 }
 
-worker.on('failed', (job, err) => {
+worker?.on('failed', (job, err) => {
   logger.error({ jobId: job?.id, err }, 'Queue job failed');
 });
 
-worker.on('error', (err) => {
+worker?.on('error', (err) => {
   logger.error({ err }, 'Worker error');
 });
 
@@ -689,10 +721,10 @@ void startPolicyStore({
   snapshotPath: path.join(STORAGE_ROOT, 'policy.snapshot.json'),
 }).catch((err: unknown) => logger.error({ err }, 'Policy store failed to start; using code defaults'));
 
-worker.on('ready', () => {
+worker?.on('ready', () => {
   logger.info(
     {
-      queue: MEDIA_QUEUE_NAME,
+      queue: mediaQueueName,
       concurrency: TOTAL_CONCURRENCY,
       reservedForPro: env.WORKER_CONCURRENCY_PRO,
       storage: STORAGE_ROOT,
@@ -702,50 +734,65 @@ worker.on('ready', () => {
 });
 
 /**
- * Artifact expiry.
+ * Maintenance: artifact expiry every 15 min, storage measurement, and the daily yt-dlp tick.
  *
- * Files are the only unbounded resource this service owns, and the artifact
- * route already refuses to serve an expired row — this is what stops the disk
- * filling up behind it. The worker sweeps because the worker owns the volume.
+ * Files are the only unbounded resource this service owns, and the artifact route already refuses
+ * to serve an expired row — the sweep is what stops the disk filling up behind it. The worker
+ * sweeps and measures because the worker owns the volume; the API reads the measured total from
+ * Redis to refuse new jobs with STORAGE_FULL.
  */
-const SWEEP_INTERVAL_MS = 15 * 60 * 1000;
-
-async function sweepExpiredArtifacts(): Promise<void> {
-  const expired = await prisma.job.findMany({
-    where: { artifactPath: { not: null }, expiresAt: { lt: new Date() } },
-    select: { id: true, artifactPath: true },
-    take: 200,
-  });
-
-  for (const job of expired) {
-    if (!job.artifactPath) continue;
-    const resolved = path.resolve(job.artifactPath);
-    // Same confinement rule as the download route: never unlink outside storage.
-    if (resolved !== STORAGE_ROOT && !resolved.startsWith(STORAGE_ROOT + path.sep)) {
-      logger.error({ jobId: job.id, resolved }, 'Refusing to sweep path outside storage root');
-      continue;
-    }
-    await rm(path.dirname(resolved), { recursive: true, force: true }).catch(() => undefined);
-    await prisma.job
-      .update({
-        where: { id: job.id },
-        data: { artifactPath: null, artifactBytes: null },
-      })
-      .catch(() => undefined);
-  }
-
-  if (expired.length > 0) logger.info({ removed: expired.length }, 'Swept expired artifacts');
+async function refreshStorageUsage(): Promise<void> {
+  const used = await directorySizeBytes(STORAGE_ROOT);
+  await writeStorageUsage(redis, used);
 }
 
-const sweepTimer = setInterval(() => {
-  sweepExpiredArtifacts().catch((err: unknown) => logger.error({ err }, 'Artifact sweep failed'));
-}, SWEEP_INTERVAL_MS);
-sweepTimer.unref();
+async function runArtifactSweep(): Promise<void> {
+  await sweepExpiredArtifacts({ root: STORAGE_ROOT, db: prisma, log: logger });
+  await refreshStorageUsage();
+}
 
-void mkdir(STORAGE_ROOT, { recursive: true }).catch((err: unknown) =>
-  logger.error({ err, dir: STORAGE_ROOT }, 'Could not create storage directory'),
+const maintenanceQueue = runsMaintenance
+  ? new Queue(MAINTENANCE_QUEUE_NAME, { connection: createQueueConnection('maintenance-producer') })
+  : null;
+maintenanceQueue?.on('error', (err) => logger.error({ err }, 'Maintenance queue error'));
+
+const maintenanceWorker = runsMaintenance ? new Worker(
+  MAINTENANCE_QUEUE_NAME,
+  async (job) => {
+    if (job.name === ARTIFACT_SWEEP_JOB) return runArtifactSweep();
+    // One tick per deployment; every process (API and each worker) updates its own binary.
+    if (job.name === YTDLP_UPDATE_JOB) return void (await redis.publish(YTDLP_UPDATE_CHANNEL, String(Date.now())));
+    logger.warn({ name: job.name }, 'Unknown maintenance job; ignoring');
+  },
+  { connection: createQueueConnection('maintenance-worker'), concurrency: 1 },
+) : null;
+maintenanceWorker?.on('failed', (job, err) =>
+  logger.error({ err, name: job?.name }, 'Maintenance job failed'),
 );
-void sweepExpiredArtifacts().catch(() => undefined);
+
+if (maintenanceQueue) {
+  void scheduleMaintenance(maintenanceQueue, { ytDlpAutoUpdate: env.YTDLP_AUTO_UPDATE }).catch(
+    (err: unknown) => logger.error({ err }, 'Could not register maintenance schedules'),
+  );
+}
+
+const stopYtDlpListener = startYtDlpUpdateListener({
+  subscriber: redis.duplicate(),
+  update: () => runYtDlpSelfUpdate({ enabled: env.YTDLP_AUTO_UPDATE, ytDlpPath: env.YTDLP_PATH, log: logger }),
+  log: logger,
+});
+
+// A finished job is the only thing that grows the volume between sweeps; re-measure so the cap reacts.
+if (runsMaintenance) {
+  worker?.on('completed', () => {
+    refreshStorageUsage().catch((err: unknown) => logger.warn({ err }, 'Storage measurement failed'));
+  });
+}
+
+void mkdir(STORAGE_ROOT, { recursive: true })
+  .catch((err: unknown) => logger.error({ err, dir: STORAGE_ROOT }, 'Could not create storage directory'))
+  .then(() => (runsMaintenance ? runArtifactSweep() : undefined))
+  .catch((err: unknown) => logger.error({ err }, 'Initial artifact sweep failed'));
 
 /**
  * Shutdown. `worker.close()` waits for in-flight jobs rather than killing them —
@@ -759,7 +806,6 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   logger.info({ signal }, 'Worker shutting down');
 
-  clearInterval(sweepTimer);
   stopDbProbe();
   stopOutboxDrainer();
   stopSheetsMirror();
@@ -771,8 +817,11 @@ async function shutdown(signal: string): Promise<void> {
   }, 60_000);
   forceExit.unref();
 
+  await stopYtDlpListener();
+  await maintenanceWorker?.close().catch(() => undefined);
+  await maintenanceQueue?.close().catch(() => undefined);
   await regionalWorker?.close().catch(() => undefined);
-  await worker.close().catch((err: unknown) => logger.error({ err }, 'Worker close failed'));
+  await worker?.close().catch((err: unknown) => logger.error({ err }, 'Worker close failed'));
   await connection.quit().catch(() => undefined);
   await disconnectRedis();
   await disconnectPrisma();
@@ -783,7 +832,7 @@ async function shutdown(signal: string): Promise<void> {
 
 // Regional extraction: only when this process is configured to serve `extract:<REGION>`.
 const regionalWorker = env.WORKER_ROLE.includes('extract')
-  ? startRegionalExtractWorker((url) => extractMedia(url))
+  ? startRegionalExtractWorker((url) => extractMediaDirect(url))
   : null;
 if (regionalWorker) logger.info({ queue: `extract:${env.REGION}` }, 'Regional extract worker started');
 

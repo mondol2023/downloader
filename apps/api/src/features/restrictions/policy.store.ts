@@ -85,6 +85,12 @@ export function createPolicyStore(
   let current: EffectivePolicy = defaultsWith(seedHosts);
   let subscriber: ReturnType<Redis['duplicate']> | null = null;
   let timer: NodeJS.Timeout | null = null;
+  /** Refreshes started by a message or the poll; stop() drains them so no snapshot write outlives the store. */
+  const inflight = new Set<Promise<void>>();
+  function trackRefresh(): void {
+    const p = refresh().finally(() => inflight.delete(p));
+    inflight.add(p);
+  }
 
   function apply(next: EffectivePolicy): void {
     current = next;
@@ -203,7 +209,7 @@ function dbUnavailable(err: unknown): never {
         subscriber = redis.duplicate();
         subscriber.on('error', (err: unknown) => logger.warn({ err }, 'Policy subscriber error'));
         subscriber.on('message', (channel: string) => {
-          if (channel === POLICY_CHANNEL) void refresh();
+          if (channel === POLICY_CHANNEL) trackRefresh();
         });
         void Promise.resolve(subscriber.subscribe(POLICY_CHANNEL)).catch((err: unknown) =>
           logger.warn({ err }, 'Could not subscribe to policy:changed; relying on polling'),
@@ -213,7 +219,7 @@ function dbUnavailable(err: unknown): never {
       }
 
       if (pollMs > 0) {
-        timer = setInterval(() => void refresh(), pollMs);
+        timer = setInterval(trackRefresh, pollMs);
         timer.unref();
       }
     },
@@ -224,6 +230,7 @@ function dbUnavailable(err: unknown): never {
       const sub = subscriber;
       subscriber = null;
       if (sub) await Promise.resolve(sub.quit()).catch(() => sub.disconnect());
+      await Promise.all([...inflight]);
     },
 
     getPolicy: () => current,

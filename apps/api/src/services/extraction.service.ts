@@ -29,6 +29,7 @@ import {
   tierPolicyFor,
 } from '../features/restrictions/enforce.js';
 import { getPolicy } from '../features/restrictions/policy.current.js';
+import { PLATFORM_IDS } from '../features/restrictions/policy.schema.js';
 import { extractWithRegionalFallback } from '../features/regions/regional-extract.js';
 import type { RegionCode } from '../features/regions/region.js';
 import { extractViaRegionalQueue } from '../queue/regional-queue.js';
@@ -151,6 +152,22 @@ export async function extractMedia(
   return record;
 }
 
+/**
+ * Lock-free, cache-free extraction for the regional worker. The API already holds the extraction
+ * lock for this media while it waits on the regional job, so going through `extractMedia` here
+ * would wait on a lock held by the very request that is waiting on us. The API caches the result.
+ */
+export async function extractMediaDirect(
+  rawUrl: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<ExtractionRecord> {
+  assertExtractionOpen();
+  const source = normaliseSourceUrl(rawUrl);
+  const record = await runExtraction(source, options.signal);
+  assertDurationAllowed(record.media.durationSeconds);
+  return record;
+}
+
 async function resolveRecord(
   rawUrl: string,
   options: { signal?: AbortSignal; force?: boolean; userRegion?: RegionCode | null },
@@ -185,7 +202,11 @@ async function resolveRecord(
     await writeCache(record);
     return record;
   } catch (err) {
-    if (err instanceof AppError && isIneligibleCode(err.code)) await writeRefusal(source.mediaId, err.code);
+    // A geo-block depends on where the request ran, not on the media: caching it would also refuse
+    // users in a region where it plays.
+    if (err instanceof AppError && isIneligibleCode(err.code) && err.code !== 'SOURCE_GEOBLOCKED') {
+      await writeRefusal(source.mediaId, err.code);
+    }
     throw err;
   } finally {
     // Only release a lock we still own.
@@ -370,6 +391,11 @@ export function translateExtractionError(
   const stderr = err.stderr.toLowerCase();
   logger.warn({ platform: source.platform, stderr: err.stderr.slice(-800) }, 'yt-dlp extraction failed');
 
+  // YouTube's bot / IP-reputation challenge reads like a login wall but is about OUR address, not
+  // the media: temporary, retryable, and must never be cached as "this video is private".
+  if (/confirm you(?:'|’|‘)?re not a bot/i.test(err.stderr)) {
+    return AppError.unavailable('The source is asking for verification right now. Please try again in a few minutes.');
+  }
   if (stderr.includes('is not a valid url') || stderr.includes('unsupported url')) {
     return AppError.badRequest('That site is not supported yet.');
   }
@@ -382,11 +408,11 @@ export function translateExtractionError(
   if (stderr.includes('age') && stderr.includes('confirm')) {
     return new AppError(403, 'SOURCE_AGE_RESTRICTED', 'That media is age-restricted at the source.');
   }
-  if (stderr.includes('video unavailable') || stderr.includes('404') || stderr.includes('not found')) {
-    return AppError.notFound('That media no longer exists at the source.');
-  }
   if (stderr.includes('geo') || stderr.includes('not available in your country')) {
     return new AppError(451, 'SOURCE_GEOBLOCKED', 'That media is blocked in this service\'s region.');
+  }
+  if (stderr.includes('video unavailable') || stderr.includes('404') || stderr.includes('not found')) {
+    return AppError.notFound('That media no longer exists at the source.');
   }
   if (stderr.includes('copyright') || stderr.includes('drm')) {
     return new AppError(403, 'SOURCE_PROTECTED', 'That media is DRM-protected and cannot be processed.');
@@ -466,12 +492,21 @@ export function buildRecord(source: NormalisedSource, payload: YtDlpPayload): Ex
   };
 }
 
+/** The platform id the admin policy is keyed by; extractor variants (`twitchvod`) fold into it. */
 function normalisePlatform(extractor: string, source: NormalisedSource): string {
+  // The host is what the user actually pasted; trust it when it names a policed platform.
+  if (isPlatformId(source.platform)) return source.platform;
   const key = extractor.toLowerCase();
   if (!key || key === 'generic') return source.platform;
   // `Youtube:tab` / `TikTok` / `Facebook` → a stable, lowercase family name.
   const family = key.split(':')[0] ?? key;
-  return family === 'twitter' ? 'x' : family || platformFromHost(source.host);
+  if (family.startsWith('twitter')) return 'x';
+  const known = PLATFORM_IDS.find((id) => family.startsWith(id));
+  return known ?? (family || platformFromHost(source.host));
+}
+
+function isPlatformId(value: string): boolean {
+  return (PLATFORM_IDS as readonly string[]).includes(value);
 }
 
 function normaliseFormats(payload: YtDlpPayload): {

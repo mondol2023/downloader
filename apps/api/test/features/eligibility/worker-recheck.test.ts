@@ -18,7 +18,27 @@ vi.mock('bullmq', () => ({
     }
     async close() {}
   },
+  Queue: class {
+    on() {
+      return this;
+    }
+    async close() {}
+  },
   DelayedError: class DelayedError extends Error {},
+}));
+
+// Maintenance (sweep, storage gauge, yt-dlp updates) is covered in test/features/maintenance.
+vi.mock('../../../src/features/maintenance/index.js', () => ({
+  ARTIFACT_SWEEP_JOB: 'artifact-sweep',
+  MAINTENANCE_QUEUE_NAME: 'maintenance',
+  YTDLP_UPDATE_CHANNEL: 'tools:ytdlp-update',
+  YTDLP_UPDATE_JOB: 'ytdlp-update',
+  directorySizeBytes: async () => 0,
+  runYtDlpSelfUpdate: async () => ({ ran: false, ok: false, version: null }),
+  scheduleMaintenance: async () => undefined,
+  startYtDlpUpdateListener: () => async () => undefined,
+  sweepExpiredArtifacts: async () => 0,
+  writeStorageUsage: async () => undefined,
 }));
 
 vi.mock('../../../src/config/env.js', () => ({
@@ -32,6 +52,7 @@ vi.mock('../../../src/config/env.js', () => ({
     ARTIFACT_TTL: 3600,
     EXTRACTION_TIMEOUT_MS: 1000,
     WORKER_ROLE: ['download'],
+    REGION: 'default',
   },
 }));
 
@@ -46,7 +67,7 @@ vi.mock('../../../src/lib/prisma.js', () => ({
 vi.mock('../../../src/lib/redis.js', () => ({
   createQueueConnection: () => ({ quit: vi.fn() }),
   disconnectRedis: vi.fn(),
-  redis: {},
+  redis: { duplicate: () => ({}) },
   keys: {
     extraction: (id: string) => `media:extract:${id}`,
     extractionLock: (id: string) => `media:extract:lock:${id}`,
@@ -84,7 +105,7 @@ vi.mock('../../../src/features/persistence/index.js', () => ({
 }));
 // The engine binaries are present in this fake environment; runCommand below fakes only the download.
 vi.mock('../../../src/features/health/index.js', () => ({
-  assertEngineAvailable: () => undefined,
+  ensureEngineAvailable: async () => undefined,
   initToolVersions: async () => ({ ytDlp: 'test', ffmpeg: 'test', ffprobe: 'test' }),
 }));
 
@@ -105,6 +126,15 @@ vi.mock('../../../src/services/extraction.service.js', async () => {
     extractMedia: vi.fn(async () => ({ media: { platform: 'youtube' } })),
     findFormat: vi.fn(() => ({ id: '18', track: 'video', requiresMux: false })),
   };
+});
+
+const tierPolicySpy = vi.fn();
+vi.mock('../../../src/features/restrictions/enforce.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/features/restrictions/enforce.js')>(
+    '../../../src/features/restrictions/enforce.js',
+  );
+  tierPolicySpy.mockImplementation(actual.tierPolicyFor);
+  return { ...actual, tierPolicyFor: tierPolicySpy };
 });
 
 vi.mock('../../../src/queue/queues.js', () => ({ MEDIA_QUEUE_NAME: 'media-jobs' }));
@@ -171,5 +201,35 @@ describe('worker re-check', () => {
       .find((d) => d.state === 'FAILED');
     expect(failed!.error).toMatch(/^SOURCE_MEMBERS_ONLY: /);
     expect(commitDownload).not.toHaveBeenCalled();
+  });
+
+  it('download argv never fakes X-Forwarded-For (--xff never, before the URL separator)', async () => {
+    runCommand.mockResolvedValue({ stdout: '', stderr: '' });
+    await processors[0]!(bullJob(), 'tok').catch(() => undefined);
+
+    const args = (runCommand.mock.calls[0]![1] as { args: string[] }).args;
+    const i = args.indexOf('--xff');
+    expect(i).toBeGreaterThan(-1);
+    expect(args[i + 1]).toBe('never');
+    expect(i).toBeLessThan(args.indexOf('--'));
+  });
+
+  it('a bot / IP-reputation challenge is retryable, not a permanent SOURCE_PRIVATE failure', async () => {
+    runCommand.mockRejectedValue(
+      new CommandError('exit 1', 1, "ERROR: [youtube] abc: Sign in to confirm you're not a bot"),
+    );
+
+    await expect(processors[0]!(bullJob(), 'tok')).rejects.toThrow();
+
+    const states = jobUpdate.mock.calls.map(([arg]) => (arg as { data: { state?: string } }).data.state);
+    expect(states).not.toContain('FAILED');
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('platform caps apply in the worker: tierPolicyFor receives the host-derived platform', async () => {
+    runCommand.mockResolvedValue({ stdout: '', stderr: '' });
+    await processors[0]!(bullJob(), 'tok').catch(() => undefined);
+    expect(tierPolicySpy).toHaveBeenCalled();
+    expect(tierPolicySpy.mock.calls.every(([, platform]) => platform === 'youtube')).toBe(true);
   });
 });

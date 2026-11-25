@@ -33,9 +33,10 @@ vi.mock('../../../src/lib/exec.js', async () => {
   return { ...actual, runCommand };
 });
 
-const { buildRecord, extractMedia, translateExtractionError } = await import(
+const { buildRecord, extractMedia, extractMediaDirect, translateExtractionError } = await import(
   '../../../src/services/extraction.service.js'
 );
+const { isIneligibleCode } = await import('../../../src/services/extraction.service.js');
 const { normaliseSourceUrl } = await import('../../../src/lib/source-url.js');
 const { CommandError } = await import('../../../src/lib/exec.js');
 const { AppError } = await import('../../../src/lib/errors.js');
@@ -171,5 +172,79 @@ describe('extractMedia refusal cache', () => {
     await extractMedia('https://www.youtube.com/watch?v=abc', { force: true });
     const args: string[] = runCommand.mock.calls[0]![1].args;
     expect(args.slice(args.indexOf('--xff'), args.indexOf('--xff') + 2)).toEqual(['--xff', 'never']);
+  });
+});
+
+describe('bot / IP-reputation challenges (not a private video)', () => {
+  const run = (stderr: string) => translateExtractionError(new CommandError('boom', 1, stderr), yt);
+
+  it.each([
+    "ERROR: [youtube] abc: Sign in to confirm you're not a bot. Use --cookies-from-browser",
+    'ERROR: [youtube] abc: Sign in to confirm you\u2019re not a bot. Use --cookies',
+  ])('maps %s to a retryable code, not SOURCE_PRIVATE', (stderr) => {
+    const err = run(stderr);
+    expect(err.code).toBe('SERVICE_UNAVAILABLE');
+    expect(err.status).toBe(503);
+    expect(isIneligibleCode(err.code)).toBe(false);
+  });
+
+  it('is never written to the refusal cache', async () => {
+    runCommand.mockRejectedValue(
+      new CommandError('boom', 1, "ERROR: Sign in to confirm you're not a bot"),
+    );
+    await expect(extractMedia('https://www.youtube.com/watch?v=abc')).rejects.toMatchObject({
+      code: 'SERVICE_UNAVAILABLE',
+    });
+    expect(store.has(`elig:${yt.mediaId}`)).toBe(false);
+  });
+});
+
+describe('SOURCE_GEOBLOCKED is never cached', () => {
+  it('a geo-block from this region is not remembered for 10 minutes', async () => {
+    runCommand.mockRejectedValue(
+      new CommandError('boom', 1, 'ERROR: [youtube] abc: Video unavailable. This video is not available in your country'),
+    );
+    await expect(extractMedia('https://www.youtube.com/watch?v=abc')).rejects.toMatchObject({
+      code: 'SOURCE_GEOBLOCKED',
+    });
+    expect(store.has(`elig:${yt.mediaId}`)).toBe(false);
+  });
+});
+
+describe('extractMediaDirect (regional worker path)', () => {
+  it('skips the extraction lock and cache wait', async () => {
+    runCommand.mockResolvedValue({ stdout: JSON.stringify(fixture('drm-mixed')) });
+    const rec = await extractMediaDirect('https://www.youtube.com/watch?v=abc');
+    expect(rec.media.id).toBe(yt.mediaId);
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    expect(redisMock.set.mock.calls.some(([k]) => String(k).startsWith('media:extract:lock:'))).toBe(false);
+    expect(redisMock.get.mock.calls.some(([k]) => String(k).startsWith('media:extract:lock:'))).toBe(false);
+  });
+});
+
+describe('policy platform for extractor-key variants', () => {
+  it('TwitchVod on a twitch.tv URL is policed as "twitch"', async () => {
+    const { setCurrentPolicy } = await import('../../../src/features/restrictions/policy.current.js');
+    const { mergePolicy } = await import('../../../src/features/restrictions/merge.js');
+    const { DEFAULT_POLICY } = await import('../../../src/features/restrictions/restrictions.config.js');
+    const { assertPlatformAllowed } = await import('../../../src/features/restrictions/enforce.js');
+
+    const twitch = normaliseSourceUrl('https://www.twitch.tv/videos/123');
+    const rec = buildRecord(twitch, { ...fixture('drm-mixed'), extractor_key: 'TwitchVod' });
+    expect(rec.media.platform).toBe('twitch');
+
+    const policy = mergePolicy(DEFAULT_POLICY, { platforms: { twitch: { download: false } } } as never, 1);
+    setCurrentPolicy(policy);
+    try {
+      expect(() => assertPlatformAllowed(rec.media.platform, 'download')).toThrow(/./);
+    } finally {
+      setCurrentPolicy(mergePolicy(DEFAULT_POLICY, {}, 0));
+    }
+  });
+
+  it('extractor families map to platform ids by prefix when the host is unknown', () => {
+    const odd = normaliseSourceUrl('https://video.example.com/watch/ghi');
+    expect(buildRecord(odd, { ...fixture('drm-mixed'), extractor_key: 'FacebookReel' }).media.platform).toBe('facebook');
+    expect(buildRecord(odd, { ...fixture('drm-mixed'), extractor_key: 'Twitter' }).media.platform).toBe('x');
   });
 });

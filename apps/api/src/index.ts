@@ -18,6 +18,7 @@ import {
 } from './features/persistence/index.js';
 import { startPolicyStore, stopPolicyStore } from './features/restrictions/policy.store.js';
 import { createHealthRouter, getToolVersions, initToolVersions } from './features/health/index.js';
+import { runYtDlpSelfUpdate, startYtDlpUpdateListener } from './features/maintenance/index.js';
 import { closeQueue } from './queue/queues.js';
 import { attachIdentity, csrfGuard } from './middleware/identity.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
@@ -167,6 +168,12 @@ void initToolVersions(
   { ytDlp: env.YTDLP_PATH, ffmpeg: env.FFMPEG_PATH, ffprobe: env.FFPROBE_PATH },
   logger,
 );
+// The worker's daily tick broadcasts; the API extracts with its own yt-dlp, so it updates itself too.
+const stopYtDlpListener = startYtDlpUpdateListener({
+  subscriber: redis.duplicate(),
+  update: () => runYtDlpSelfUpdate({ enabled: env.YTDLP_AUTO_UPDATE, ytDlpPath: env.YTDLP_PATH, log: logger }),
+  log: logger,
+});
 
 app.get('/health/ready', async (_req, res) => {
   const [db, cache] = await Promise.all([
@@ -251,6 +258,7 @@ async function shutdown(signal: string): Promise<void> {
   stopDbProbe();
   stopOutboxDrainer();
   stopSheetsMirror();
+  await stopYtDlpListener();
   await stopPolicyStore().catch(() => undefined);
 
   const forceExit = setTimeout(() => {

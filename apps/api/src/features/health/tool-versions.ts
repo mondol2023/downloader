@@ -123,3 +123,35 @@ export function assertEngineAvailable(versions: ToolVersions = current): void {
     );
   }
 }
+
+/** A tool that probed null is re-probed at most this often, so a dead binary is not spawned per job. */
+export const REPROBE_INTERVAL_MS = 30_000;
+
+const lastProbeAt = new Map<ToolName, number>();
+
+export interface EnsureEngineDeps extends LoadToolDeps {
+  now?: () => number;
+}
+
+/**
+ * Like `assertEngineAvailable`, but a required tool that is null (one slow boot probe, a binary
+ * installed after boot) is re-probed first, throttled per tool, and the stored version updated.
+ * Only a tool that is still missing refuses the job; ENGINE_UNAVAILABLE stays permanent.
+ */
+export async function ensureEngineAvailable(paths: ToolPaths, deps: EnsureEngineDeps = {}): Promise<void> {
+  const now = (deps.now ?? Date.now)();
+  const due = missingJobTools().filter((tool) => {
+    const last = lastProbeAt.get(tool);
+    return last === undefined || now - last >= REPROBE_INTERVAL_MS;
+  });
+  if (due.length > 0) {
+    for (const tool of due) lastProbeAt.set(tool, now);
+    await Promise.all(
+      due.map(async (tool) => {
+        const version = await readToolVersion(tool, paths[tool], deps);
+        if (version != null) setToolVersion(tool, version);
+      }),
+    );
+  }
+  assertEngineAvailable();
+}

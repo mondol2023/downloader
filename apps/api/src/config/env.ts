@@ -37,12 +37,16 @@ const schema = z.object({
   FFPROBE_PATH: z.string().default('ffprobe'),
   EXTRACTION_TIMEOUT_MS: z.coerce.number().int().positive().default(45_000),
   YTDLP_COOKIES_FILE: z.string().optional(),
+  /** Daily 04:00 `yt-dlp -U` in every process that runs yt-dlp. Off for pip/apt installs, which refuse `-U`. */
+  YTDLP_AUTO_UPDATE: bool.default(false),
 
   /** Optional Google Sheets ledger mirror; off unless BOTH are set. Key file must live outside the repo. */
   SHEETS_SPREADSHEET_ID: z.string().optional(),
   GOOGLE_SERVICE_ACCOUNT_FILE: z.string().optional(),
 
   STORAGE_DIR: z.string().default('./storage'),
+  /** Past this many GiB in STORAGE_DIR, new jobs are refused with STORAGE_FULL until a sweep frees space. */
+  STORAGE_MAX_GB: z.coerce.number().positive().default(20),
   ARTIFACT_TTL: z.coerce.number().int().positive().default(86_400),
   /** How long a minted stream grant stays valid. Short: playback re-mints. */
   STREAM_GRANT_TTL: z.coerce.number().int().positive().default(21_600),
@@ -53,6 +57,8 @@ const schema = z.object({
 
   /** True only when the API sits behind a proxy/CDN that sets the country header. */
   TRUST_PROXY: bool.default(false),
+  /** Proxy/CDN peers (CIDRs or exact IPs) whose country header is believed. Empty = header ignored. */
+  TRUSTED_PROXY_CIDRS: csv,
   /** This deployment's region (e.g. eu). */
   REGION: z.string().trim().toLowerCase().default('default'),
   /** Regions that have workers deployed. */

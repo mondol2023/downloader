@@ -3,8 +3,11 @@ import express from 'express';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createHealthRouter,
+  ensureEngineAvailable,
+  getToolVersions,
   loadToolVersions,
   parseToolVersion,
+  setToolVersions,
   type ToolVersions,
 } from '../../../src/features/health/index.js';
 
@@ -108,5 +111,42 @@ describe('parseToolVersion', () => {
     expect(parseToolVersion('2026.11.01\n')).toBe('2026.11.01');
     expect(parseToolVersion('ffmpeg version 7.1 Copyright (c) 2000-2024')).toBe('7.1');
     expect(parseToolVersion('   \n')).toBeNull();
+  });
+});
+
+describe('ensureEngineAvailable (sticky null probe)', () => {
+  const paths = { ytDlp: 'yt-dlp', ffmpeg: 'ffmpeg', ffprobe: 'ffprobe' };
+
+  it('re-probes a required tool that probed null at boot, then lets the job through', async () => {
+    setToolVersions({ ytDlp: null, ffmpeg: '7.1', ffprobe: '7.1' });
+    const run = vi.fn(async () => '2026.11.01');
+    await expect(ensureEngineAvailable(paths, { run, now: () => 1_000_000 })).resolves.toBeUndefined();
+    expect(getToolVersions().ytDlp).toBe('2026.11.01');
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses with ENGINE_UNAVAILABLE when the tool is really missing, and throttles to 1 probe / 30 s / tool', async () => {
+    setToolVersions({ ytDlp: '2026.11.01', ffmpeg: null, ffprobe: '7.1' });
+    const run = vi.fn(async () => {
+      throw new Error('spawn ffmpeg ENOENT');
+    });
+    let t = 5_000_000;
+    const deps = { run, now: () => t };
+
+    await expect(ensureEngineAvailable(paths, deps)).rejects.toMatchObject({ code: 'ENGINE_UNAVAILABLE' });
+    t += 10_000;
+    await expect(ensureEngineAvailable(paths, deps)).rejects.toMatchObject({ code: 'ENGINE_UNAVAILABLE' });
+    expect(run).toHaveBeenCalledTimes(1);
+
+    t += 25_000; // 35 s after the first probe
+    await expect(ensureEngineAvailable(paths, deps)).rejects.toMatchObject({ code: 'ENGINE_UNAVAILABLE' });
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not probe at all when every required tool is known', async () => {
+    setToolVersions({ ytDlp: '1', ffmpeg: '1', ffprobe: null });
+    const run = vi.fn();
+    await ensureEngineAvailable(paths, { run, now: () => 9_000_000 });
+    expect(run).not.toHaveBeenCalled();
   });
 });
