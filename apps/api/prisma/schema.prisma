@@ -18,6 +18,12 @@ enum Tier {
   PRO
 }
 
+enum Role {
+  USER
+  EDITOR
+  ADMIN
+}
+
 enum SubscriptionStatus {
   ACTIVE
   TRIALING
@@ -55,6 +61,8 @@ model User {
   // Denormalised effective tier. Written only by the subscription reconciler
   // so a single query answers "what may this user do".
   tier           Tier     @default(FREE)
+  // Read from the database on every admin request (never from the JWT) so a demotion is immediate.
+  role           Role     @default(USER)
   stripeCustomerId String? @unique
   // Soft ban / abuse control.
   disabledAt     DateTime?
@@ -69,6 +77,7 @@ model User {
   downloads      DownloadLog[]
 
   @@index([tier])
+  @@index([role])
   @@index([createdAt])
 }
 
@@ -214,8 +223,14 @@ model AuditEvent {
   ip        String?
   userAgent String?
   metadata  Json?
+  /// Admin console: who acted, on what, and the state before/after the change.
+  actorId   String?
+  target    String?
+  before    Json?
+  after     Json?
   createdAt DateTime @default(now())
 
+  @@index([actorId, createdAt])
   @@index([userId, createdAt])
   @@index([action, createdAt])
 }

@@ -4,6 +4,7 @@ import authRoutes from './auth.routes.js';
 import billingRoutes from './billing.routes.js';
 import jobsRoutes from './jobs.routes.js';
 import mediaRoutes from './media.routes.js';
+import adminRouter from '../features/admin/admin.router.js';
 import policyRoutes from '../features/restrictions/policy.routes.js';
 
 /**
@@ -39,5 +40,7 @@ router.use('/media', mediaRoutes);
 router.use('/policy', policyRoutes);
 router.use('/jobs', writesNeedDatabase, jobsRoutes);
 router.use('/billing', requireDatabase, billingRoutes);
+// Role is checked per-router (EDITOR for /admin/cms, ADMIN for the rest) against the database.
+router.use('/admin', adminRouter);
 
 export default router;
