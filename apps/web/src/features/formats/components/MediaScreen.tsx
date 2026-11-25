@@ -32,7 +32,7 @@ export function MediaView({ result, pending, error, queued, onDownload }: {
   return (
     <main className="mx-auto grid w-full max-w-6xl gap-8 px-4 py-10 lg:grid-cols-[minmax(0,1fr)_26rem]">
       <div className="space-y-4">
-        <motion.header {...reveal} className="space-y-2">
+        <motion.header {...reveal} data-testid="result-card" className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <Badge>{media.platform}</Badge>
             <Badge>{formatDuration(media.durationSeconds)}</Badge>

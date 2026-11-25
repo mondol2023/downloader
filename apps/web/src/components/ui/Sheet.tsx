@@ -5,8 +5,15 @@ import { useState, type ReactNode } from "react";
 import { duration, ease, spring } from "@/design/motion";
 import { useMotionSafe } from "@/design/use-motion-safe";
 
-export function Sheet({ trigger, title, children }: { trigger: ReactNode; title: string; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
+export function Sheet({ trigger, title, children, open: controlled, onOpenChange }: {
+  trigger: ReactNode; title: string; children: ReactNode; open?: boolean; onOpenChange?: (open: boolean) => void;
+}) {
+  const [inner, setInner] = useState(false);
+  const open = controlled ?? inner;
+  const setOpen = (o: boolean) => {
+    setInner(o);
+    onOpenChange?.(o);
+  };
   // Panel: y 24 -> 0 on `spring.gentle`; exit is a quick fade (`duration.fast`).
   const panel = useMotionSafe(
     { initial: { opacity: 0, y: 24 }, animate: { opacity: 1, y: 0 }, exit: { opacity: 0, y: 8 } },

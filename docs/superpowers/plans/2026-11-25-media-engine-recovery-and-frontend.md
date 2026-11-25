@@ -702,7 +702,7 @@ Don't animate: typing in inputs, numbers counting, table sorting, anything that 
 - [ ] **7.1** Wrap the app in `<MotionConfig reducedMotion="user">` and add `src/design/use-motion-safe.ts`, which returns opacity-only variants (≤ `duration.fast`) when reduced motion is on.
 - [ ] **7.2** Implement the table row by row, one commit per row group (navigation, extract, formats, jobs, overlays).
 - [ ] **7.3 Performance check:** in Chrome DevTools → Performance, at 4× CPU throttle, with 10 jobs updating there should be no frames over 16 ms and no layout shifts (CLS 0). Only `transform`/`opacity`/`clip-path` should appear in the Animations panel.
-- [ ] **7.4 Playwright reduced-motion test:** `test.use({ reducedMotion: 'reduce' })`. Paste a URL, then assert that the input deck's computed `transform` is `none` throughout, and that the result card reaches opacity 1 within 200 ms.
+- [x] **7.4 Playwright reduced-motion test:** `test.use({ reducedMotion: 'reduce' })`. Paste a URL, then assert that the input deck's computed `transform` is `none` throughout, and that the result card reaches opacity 1 within 200 ms.
 - [ ] **7.5** Run the `review-animations` skill, then fix and commit.
 
 ---
@@ -762,7 +762,7 @@ Rules:
 - `src/features/admin/shell/`: sidebar with Dashboard, Restrictions, Sites, Tiers, Takedowns, Users, Jobs, Audit, Content.
 - `src/features/admin/dashboard/`: stat tiles and a refusals-by-code bar list from `/admin/stats`. Use the `dataviz` skill.
 
-- [ ] Build with mock data on `/dev/admin`, wire to the API, add Playwright `e2e/admin-guard.spec.ts` (USER is redirected; ADMIN sees the sidebar). Commit.
+- [x] Build with mock data on `/dev/admin`, wire to the API, add Playwright `e2e/admin-guard.spec.ts` (USER is redirected; ADMIN sees the sidebar). Commit.
 
 ### Task 8.4: Restrictions editor (web)  `[agent · sonnet · high]` (the riskiest admin screen)
 
@@ -782,7 +782,7 @@ Rules:
 
 ### Task 8.5: Takedowns, users, jobs, audit screens (web)  `[agent · haiku · medium]` (repetitive table + sheet CRUD on the patterns from 8.3/8.4)
 
-- [ ] One feature folder per screen, built on a shared `DataTable` (server cursor pagination, URL-synced filters) and `EditSheet`. Destructive actions (disable user, approve takedown, cancel job) use a confirm dialog that names the target. Commit per screen.
+- [x] One feature folder per screen, built on a shared `DataTable` (server cursor pagination, URL-synced filters) and `EditSheet`. Destructive actions (disable user, approve takedown, cancel job) use a confirm dialog that names the target. Commit per screen.
 
 ---
 
