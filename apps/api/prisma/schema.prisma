@@ -258,3 +258,24 @@ model PolicyVersion {
 
   @@index([active])
 }
+
+enum TakedownStatus {
+  PENDING
+  ACTIVE
+  REJECTED
+}
+
+// A source removed from the service on request. `mediaId` is the same hash extraction keys on,
+// so an ACTIVE row refuses every URL that normalises to it (SOURCE_TAKEN_DOWN).
+model Takedown {
+  id             String         @id @default(cuid())
+  mediaId        String         @unique
+  sourceUrl      String
+  reason         String
+  status         TakedownStatus @default(PENDING)
+  requesterEmail String?
+  createdAt      DateTime       @default(now())
+  decidedById    String?
+
+  @@index([status, createdAt])
+}

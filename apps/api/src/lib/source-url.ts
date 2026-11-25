@@ -51,7 +51,10 @@ export interface NormalisedSource {
   mediaId: string;
 }
 
-export function normaliseSourceUrl(input: string): NormalisedSource {
+export function normaliseSourceUrl(
+  input: string,
+  options: { skipPolicy?: boolean } = {},
+): NormalisedSource {
   const trimmed = input.trim();
   if (!trimmed) throw AppError.badRequest('A media URL is required');
   if (trimmed.length > 2048) throw AppError.badRequest('That URL is too long');
@@ -78,9 +81,12 @@ export function normaliseSourceUrl(input: string): NormalisedSource {
   if (isPrivateHostname(host)) {
     throw AppError.badRequest('That host is not reachable from this service');
   }
-  if (isBlockedHost(host, getPolicy())) throw refusalError('SOURCE_BLOCKED_DOMAIN');
   const platform = platformFromHost(host);
-  assertPlatformAllowed(platform, 'extract');
+  // Admin tooling (takedowns, policy preview) needs the media id of a URL the live policy refuses.
+  if (!options.skipPolicy) {
+    if (isBlockedHost(host, getPolicy())) throw refusalError('SOURCE_BLOCKED_DOMAIN');
+    assertPlatformAllowed(platform, 'extract');
+  }
 
   // Rebuild rather than mutate, so nothing exotic survives.
   const canonicalUrl = new URL(`${parsed.protocol}//${host}${parsed.pathname}`);

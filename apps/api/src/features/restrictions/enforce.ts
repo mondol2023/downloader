@@ -9,7 +9,7 @@ import {
 import { AppError } from '../../lib/errors.js';
 import { refusalError } from '../eligibility/refusal.js';
 import { getPolicy } from './policy.current.js';
-import { PLATFORM_IDS, type PlatformId } from './policy.schema.js';
+import { PLATFORM_IDS, type EffectivePolicy, type PlatformId } from './policy.schema.js';
 
 export type PlatformAction = 'extract' | 'download' | 'playback';
 
@@ -71,7 +71,11 @@ export function assertDurationAllowed(durationSeconds: number | null | undefined
  * `maxHeight` is intersected with the tier's, so the stricter of the two wins.
  */
 export function tierPolicyFor(tier: Tier, platform?: string): TierPolicy {
-  const policy = getPolicy();
+  return tierPolicyIn(getPolicy(), tier, platform);
+}
+
+/** `tierPolicyFor` against an explicit policy; the admin preview runs it on a draft. */
+export function tierPolicyIn(policy: EffectivePolicy, tier: Tier, platform?: string): TierPolicy {
   const base = TIER_POLICIES[tier];
   const soft = policy.tiers[tier];
   let maxHeight = soft.maxHeight;
@@ -88,7 +92,16 @@ export function evaluateAccess(
   input: FormatConstraintInput,
   platform?: string,
 ): { allowed: boolean; reason: LockReason | null } {
-  const p = tierPolicyFor(tier, platform);
+  return evaluateAccessIn(getPolicy(), tier, input, platform);
+}
+
+export function evaluateAccessIn(
+  policy: EffectivePolicy,
+  tier: Tier,
+  input: FormatConstraintInput,
+  platform?: string,
+): { allowed: boolean; reason: LockReason | null } {
+  const p = tierPolicyIn(policy, tier, platform);
   if (input.height != null && input.height > p.maxHeight) return { allowed: false, reason: 'RESOLUTION' };
   if (input.fps != null && input.fps > p.maxFps) return { allowed: false, reason: 'FPS' };
   if (input.sizeBytes != null && input.sizeBytes > p.maxFileSizeBytes) return { allowed: false, reason: 'FILE_SIZE' };

@@ -14,6 +14,11 @@ export function setAudit(res: { locals: Record<string, unknown> }, entry: AdminA
   res.locals.audit = entry;
 }
 
+/** For POST routes that only read (policy preview): no state changed, so no audit row. */
+export function skipAudit(res: { locals: Record<string, unknown> }): void {
+  res.locals.audit = null;
+}
+
 /**
  * Every mutating admin request writes an AuditEvent { actorId, action, target, before, after }.
  * Handlers call `setAudit`; if one forgets, a generic `METHOD path` row is still written so
@@ -25,7 +30,7 @@ export const auditMutations: RequestHandler = (req, res, next) => {
     return;
   }
   res.on('finish', () => {
-    if (res.statusCode >= 400) return;
+    if (res.statusCode >= 400 || res.locals.audit === null) return;
     const entry = (res.locals.audit as AdminAuditEntry | undefined) ?? {
       action: `${req.method} ${req.baseUrl}${req.path}`,
     };

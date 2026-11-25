@@ -12,6 +12,8 @@ export interface EligibilityInput {
   /** One entry per format, in the order yt-dlp returned them: true if that format is DRM-protected. */
   formatDrm: boolean[];
   host: string;
+  /** True when an ACTIVE takedown exists for this media (looked up by the caller; this stays pure). */
+  takenDown?: boolean;
 }
 
 export type EligibilityVerdict =
@@ -22,7 +24,7 @@ const refuse = (code: IneligibleCode): EligibilityVerdict => ({ eligible: false,
 
 /**
  * Decides whether a source may be shown and downloaded, from the fields yt-dlp reports.
- * Pure. Check order: blocked host → private → members → needs_auth → age → live → DRM.
+ * Pure. Check order: blocked host → taken down → private → members → needs_auth → age → live → DRM.
  *
  * Without `policy` only the code-only hard floor applies; with it, the admin's extra
  * blocked hosts and a stricter age cap apply too. A policy can tighten, never loosen.
@@ -32,6 +34,8 @@ export function evaluateEligibility(
   policy?: Pick<EffectivePolicy, 'global'>,
 ): EligibilityVerdict {
   if (isBlockedHost(input.host, policy)) return refuse('SOURCE_BLOCKED_DOMAIN');
+
+  if (input.takenDown) return refuse('SOURCE_TAKEN_DOWN');
 
   switch (input.availability) {
     case 'private':

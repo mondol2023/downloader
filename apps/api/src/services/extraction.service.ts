@@ -21,6 +21,8 @@ import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { CommandError, assertNotFlag, runCommand } from '../lib/exec.js';
 import { evaluateEligibility, refusalError } from '../features/eligibility/index.js';
+import { assertNotTakenDown } from '../features/eligibility/takedown.js';
+import { bumpStat } from '../features/admin/stats-counters.js';
 import {
   assertDurationAllowed,
   assertExtractionOpen,
@@ -147,9 +149,15 @@ export async function extractMedia(
   options: { signal?: AbortSignal; force?: boolean; userRegion?: RegionCode | null } = {},
 ): Promise<ExtractionRecord> {
   assertExtractionOpen();
-  const record = await resolveRecord(rawUrl, options);
-  assertDurationAllowed(record.media.durationSeconds);
-  return record;
+  try {
+    const record = await resolveRecord(rawUrl, options);
+    assertDurationAllowed(record.media.durationSeconds);
+    bumpStat('extracts', record.media.platform);
+    return record;
+  } catch (err) {
+    if (err instanceof AppError && isIneligibleCode(err.code)) bumpStat('refusals', err.code);
+    throw err;
+  }
 }
 
 /**
@@ -163,6 +171,7 @@ export async function extractMediaDirect(
 ): Promise<ExtractionRecord> {
   assertExtractionOpen();
   const source = normaliseSourceUrl(rawUrl);
+  await assertNotTakenDown(source.mediaId);
   const record = await runExtraction(source, options.signal);
   assertDurationAllowed(record.media.durationSeconds);
   return record;
@@ -173,6 +182,8 @@ async function resolveRecord(
   options: { signal?: AbortSignal; force?: boolean; userRegion?: RegionCode | null },
 ): Promise<ExtractionRecord> {
   const source = normaliseSourceUrl(rawUrl);
+  // Before any cache: a takedown must beat a record that was cached before it was decided.
+  await assertNotTakenDown(source.mediaId);
 
   if (!options.force) {
     const refused = await readRefusal(source.mediaId);
@@ -847,6 +858,12 @@ export function assertFormatAllowed(format: MediaFormat, tier: Tier, platform?: 
 /** Reads a cached record without triggering extraction. Used by playback routes. */
 export async function getCachedRecord(mediaId: string): Promise<ExtractionRecord | null> {
   if (!/^[0-9a-f]{24}$/.test(mediaId)) throw AppError.badRequest('Invalid media id');
+  await assertNotTakenDown(mediaId);
+  return readCache(mediaId);
+}
+
+/** Cache read with no takedown check: the admin preview needs to see records of removed media too. */
+export async function getCachedRecordUnchecked(mediaId: string): Promise<ExtractionRecord | null> {
   return readCache(mediaId);
 }
 

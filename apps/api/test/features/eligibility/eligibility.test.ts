@@ -32,6 +32,7 @@ describe('evaluateEligibility — policy table', () => {
     [{ liveStatus: 'is_live' }, 'SOURCE_LIVE'],
     [{ liveStatus: 'is_upcoming' }, 'SOURCE_LIVE'],
     [{ host: 'www.netflix.com' }, 'SOURCE_BLOCKED_DOMAIN'],
+    [{ takenDown: true }, 'SOURCE_TAKEN_DOWN'],
   ] as Array<[Partial<EligibilityInput>, string]>)('%j → refuse %s', (over, code) => {
     expect(evaluateEligibility(input(over))).toEqual({ eligible: false, code });
   });
@@ -131,9 +132,21 @@ describe('isBlockedHost', () => {
   });
 });
 
+describe('evaluateEligibility — takedown', () => {
+  it('a blocked host is reported as blocked, not taken down', () => {
+    expect(evaluateEligibility(input({ host: 'www.netflix.com', takenDown: true }))).toEqual({
+      eligible: false,
+      code: 'SOURCE_BLOCKED_DOMAIN',
+    });
+  });
+  it('takenDown: false changes nothing', () => {
+    expect(evaluateEligibility(input({ takenDown: false })).eligible).toBe(true);
+  });
+});
+
 describe('shared eligibility copy', () => {
   it('has copy for every code', () => {
-    expect(INELIGIBLE_CODES).toHaveLength(9);
+    expect(INELIGIBLE_CODES).toHaveLength(10);
     for (const code of INELIGIBLE_CODES) {
       expect(INELIGIBLE_COPY[code].title.length).toBeGreaterThan(0);
       expect(INELIGIBLE_COPY[code].body.length).toBeGreaterThan(0);
