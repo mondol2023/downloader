@@ -30,6 +30,7 @@ import {
 import { commitDownload, release, releaseSlot } from '../services/quota.service.js';
 import { assertDownloadsOpen, assertPlatformAllowed, tierPolicyFor } from '../features/restrictions/enforce.js';
 import { startPolicyStore, stopPolicyStore } from '../features/restrictions/policy.store.js';
+import { assertEngineAvailable, initToolVersions } from '../features/health/index.js';
 import { MEDIA_QUEUE_NAME, type MediaJobPayload } from './queues.js';
 import { startRegionalExtractWorker } from './regional-queue.js';
 
@@ -96,9 +97,20 @@ let activeStandardJobs = 0;
 
 const connection = createQueueConnection('worker');
 
+/**
+ * Engine binaries are probed once at boot (5 s timeout each). A missing tool is a startup
+ * warning, not a crash: the worker keeps running and refuses jobs with ENGINE_UNAVAILABLE.
+ * Jobs wait for the probe so the first one isn't refused against the empty initial snapshot.
+ */
+const toolsReady = initToolVersions(
+  { ytDlp: env.YTDLP_PATH, ffmpeg: env.FFMPEG_PATH, ffprobe: env.FFPROBE_PATH },
+  logger,
+);
+
 const worker = new Worker<MediaJobPayload>(
   MEDIA_QUEUE_NAME,
   async (job, token) => {
+    await toolsReady;
     // Non-Pro work is capped below total capacity so the reserved slots stay
     // free. Re-delaying rather than failing keeps the job's place in the world;
     // BullMQ will hand it back once a slot frees up.
@@ -310,6 +322,7 @@ async function processMediaJob(job: BullJob<MediaJobPayload>): Promise<void> {
  */
 function recheckPolicy(sourceUrl: string): void {
   try {
+    assertEngineAvailable(); // missing yt-dlp/ffmpeg → typed ENGINE_UNAVAILABLE, quota released
     assertDownloadsOpen();
     const source = normaliseSourceUrl(sourceUrl); // also applies the platform and blocked-host rules
     assertPlatformAllowed(source.platform, 'download');

@@ -17,6 +17,7 @@ import {
   startSheetsMirrorFromEnv,
 } from './features/persistence/index.js';
 import { startPolicyStore, stopPolicyStore } from './features/restrictions/policy.store.js';
+import { createHealthRouter, getToolVersions, initToolVersions } from './features/health/index.js';
 import { closeQueue } from './queue/queues.js';
 import { attachIdentity, csrfGuard } from './middleware/identity.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
@@ -153,6 +154,19 @@ app.use(attachIdentity);
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', uptime: Math.round(process.uptime()) });
 });
+
+app.use(
+  createHealthRouter({
+    dbUp: () => getDbHealth().up,
+    redisPing: () => redis.ping(),
+    tools: getToolVersions,
+    region: env.REGION,
+  }),
+);
+void initToolVersions(
+  { ytDlp: env.YTDLP_PATH, ffmpeg: env.FFMPEG_PATH, ffprobe: env.FFPROBE_PATH },
+  logger,
+);
 
 app.get('/health/ready', async (_req, res) => {
   const [db, cache] = await Promise.all([

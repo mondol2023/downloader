@@ -82,6 +82,11 @@ vi.mock('../../../src/features/persistence/index.js', () => ({
   startOutboxDrainer: () => () => undefined,
   startSheetsMirrorFromEnv: () => () => undefined,
 }));
+// The engine binaries are present in this fake environment; runCommand below fakes only the download.
+vi.mock('../../../src/features/health/index.js', () => ({
+  assertEngineAvailable: () => undefined,
+  initToolVersions: async () => ({ ytDlp: 'test', ffmpeg: 'test', ffprobe: 'test' }),
+}));
 
 const runCommand = vi.fn();
 vi.mock('../../../src/lib/exec.js', async () => {
