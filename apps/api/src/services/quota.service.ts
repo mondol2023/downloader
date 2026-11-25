@@ -3,7 +3,7 @@ import type { QuotaSnapshot, Tier } from '@media/shared';
 import { formatCount, isUnlimited, policyFor } from '@media/shared';
 import type { RequestIdentity } from '../types/express.js';
 import { keys, redis } from '../lib/redis.js';
-import { getDbHealth } from '../features/persistence/index.js';
+import { getDbHealth, recordLedger } from '../features/persistence/index.js';
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
@@ -287,9 +287,13 @@ export async function commitDownload(input: {
   userAgent?: string | null;
 }): Promise<void> {
   try {
-    await prisma.downloadLog.upsert({
-      where: { jobId: input.jobId },
-      create: {
+    // Goes through the outbox so a Postgres outage doesn't lose the ledger line.
+    // The job id doubles as the row id, which makes retries and replays idempotent.
+    await recordLedger({
+      kind: 'download_log',
+      id: input.jobId,
+      at: new Date().toISOString(),
+      data: {
         jobId: input.jobId,
         userId: input.userId,
         guestKey: input.guestKey,
@@ -301,7 +305,6 @@ export async function commitDownload(input: {
         ip: input.ip ?? null,
         userAgent: input.userAgent?.slice(0, 512) ?? null,
       },
-      update: { bytes: BigInt(Math.max(0, Math.round(input.bytes))) },
     });
   } catch (err) {
     // Never fail a completed download because the ledger write failed.
