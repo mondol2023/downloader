@@ -74,6 +74,8 @@ export interface MediaMetadata {
   likeCount: number | null;
   isLive: boolean;
   ageLimit: number;
+  /** yt-dlp `availability` (public, unlisted, …); null when the extractor does not report it. */
+  availability: string | null;
   thumbnails: Thumbnail[];
   bestThumbnail: string | null;
   subtitles: SubtitleTrack[];

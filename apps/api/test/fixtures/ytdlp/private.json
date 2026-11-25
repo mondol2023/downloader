@@ -1,0 +1,1 @@
+{"id":"abc","title":"Private clip","extractor_key":"Youtube","availability":"private","age_limit":0,"live_status":"not_live","webpage_url":"https://www.youtube.com/watch?v=abc","formats":[{"format_id":"18","ext":"mp4","protocol":"https","url":"https://cdn.example.com/18.mp4","width":1280,"height":360,"vcodec":"avc1.64001f","acodec":"mp4a.40.2","tbr":500}]}

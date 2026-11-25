@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { isPrivateHostname } from '@media/shared';
 import { AppError } from './errors.js';
+import { isBlockedHost } from '../features/eligibility/blocked-hosts.js';
+import { refusalError } from '../features/eligibility/refusal.js';
 
 /**
  * Normalises and vets a user-supplied media URL before it is ever handed to
@@ -74,6 +76,7 @@ export function normaliseSourceUrl(input: string): NormalisedSource {
   if (isPrivateHostname(host)) {
     throw AppError.badRequest('That host is not reachable from this service');
   }
+  if (isBlockedHost(host)) throw refusalError('SOURCE_BLOCKED_DOMAIN');
 
   // Rebuild rather than mutate, so nothing exotic survives.
   const canonicalUrl = new URL(`${parsed.protocol}//${host}${parsed.pathname}`);

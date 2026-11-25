@@ -3,6 +3,7 @@ import type {
   DeliveryProtocol,
   ExtractionResult,
   GatedMediaFormat,
+  IneligibleCode,
   MediaFormat,
   MediaKind,
   MediaMetadata,
@@ -11,7 +12,7 @@ import type {
   Thumbnail,
   Tier,
 } from '@media/shared';
-import { evaluateFormatAccess, minimumTierFor, policyFor } from '@media/shared';
+import { INELIGIBLE_CODES, evaluateFormatAccess, minimumTierFor, policyFor } from '@media/shared';
 import { env } from '../config/env.js';
 import { keys, redis } from '../lib/redis.js';
 import { getDbHealth } from '../features/persistence/index.js';
@@ -19,6 +20,7 @@ import { prisma } from '../lib/prisma.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { CommandError, assertNotFlag, runCommand } from '../lib/exec.js';
+import { evaluateEligibility, refusalError } from '../features/eligibility/index.js';
 import { normaliseSourceUrl, platformFromHost, type NormalisedSource } from '../lib/source-url.js';
 
 /**
@@ -57,6 +59,7 @@ interface YtDlpFormat {
   filesize?: number | null;
   filesize_approx?: number | null;
   language?: string | null;
+  has_drm?: boolean | string | null;
 }
 
 interface YtDlpSubtitle {
@@ -68,6 +71,7 @@ interface YtDlpSubtitle {
 interface YtDlpPayload {
   id?: string;
   _type?: string;
+  availability?: string | null;
   title?: string;
   description?: string | null;
   webpage_url?: string;
@@ -126,6 +130,8 @@ export async function extractMedia(
   const source = normaliseSourceUrl(rawUrl);
 
   if (!options.force) {
+    const refused = await readRefusal(source.mediaId);
+    if (refused) throw refused;
     const cached = await readCache(source.mediaId);
     if (cached) return cached;
   }
@@ -146,11 +152,39 @@ export async function extractMedia(
     const record = await runExtraction(source, options.signal);
     await writeCache(record);
     return record;
+  } catch (err) {
+    if (err instanceof AppError && isIneligibleCode(err.code)) await writeRefusal(source.mediaId, err.code);
+    throw err;
   } finally {
     // Only release a lock we still own.
     const current = await redis.get(lockKey).catch(() => null);
     if (current === lockToken) await redis.del(lockKey).catch(() => undefined);
   }
+}
+
+/** How long a refusal is remembered, so repeat pastes of the same link don't re-run yt-dlp. */
+const REFUSAL_TTL_SECONDS = 600;
+
+function isIneligibleCode(code: string): code is IneligibleCode {
+  return (INELIGIBLE_CODES as readonly string[]).includes(code);
+}
+
+async function readRefusal(mediaId: string): Promise<AppError | null> {
+  try {
+    const hit = await redis.get(keys.eligibilityRefusal(mediaId));
+    if (!hit) return null;
+    const { code } = JSON.parse(hit) as { code?: string };
+    return code && isIneligibleCode(code) ? refusalError(code) : null;
+  } catch (err) {
+    logger.warn({ err, mediaId }, 'Refusal cache read failed');
+    return null;
+  }
+}
+
+async function writeRefusal(mediaId: string, code: IneligibleCode): Promise<void> {
+  await redis
+    .set(keys.eligibilityRefusal(mediaId), JSON.stringify({ code }), 'EX', REFUSAL_TTL_SECONDS)
+    .catch((err: unknown) => logger.warn({ err, mediaId }, 'Refusal cache write failed'));
 }
 
 async function waitForCache(mediaId: string): Promise<ExtractionRecord | null> {
@@ -243,6 +277,9 @@ async function runExtraction(
     '--no-progress',
     '--no-playlist',
     '--no-call-home',
+    // Never fake X-Forwarded-For: geo-bypass would let a region-locked source through.
+    '--xff',
+    'never',
     '--ignore-config',
     '--skip-download',
     '--no-check-formats',
@@ -287,7 +324,7 @@ async function runExtraction(
   return buildRecord(source, payload);
 }
 
-function translateExtractionError(err: unknown, source: NormalisedSource): AppError {
+export function translateExtractionError(err: unknown, source: NormalisedSource): AppError {
   if (!(err instanceof CommandError)) {
     return AppError.upstream('Extraction failed unexpectedly');
   }
@@ -300,6 +337,9 @@ function translateExtractionError(err: unknown, source: NormalisedSource): AppEr
 
   if (stderr.includes('is not a valid url') || stderr.includes('unsupported url')) {
     return AppError.badRequest('That site is not supported yet.');
+  }
+  if (stderr.includes('members-only') || stderr.includes('join this channel') || stderr.includes('premium')) {
+    return refusalError('SOURCE_MEMBERS_ONLY');
   }
   if (stderr.includes('private video') || stderr.includes('login required') || stderr.includes('sign in')) {
     return new AppError(403, 'SOURCE_PRIVATE', 'That media is private or requires a sign-in on the source site.');
@@ -322,7 +362,20 @@ function translateExtractionError(err: unknown, source: NormalisedSource): AppEr
   return AppError.upstream('The source could not be read. It may be temporarily unavailable.');
 }
 
-function buildRecord(source: NormalisedSource, payload: YtDlpPayload): ExtractionRecord {
+export function buildRecord(source: NormalisedSource, payload: YtDlpPayload): ExtractionRecord {
+  const verdict = evaluateEligibility({
+    availability: payload.availability ?? null,
+    liveStatus: payload.live_status ?? (payload.is_live ? 'is_live' : null),
+    ageLimit: payload.age_limit ?? 0,
+    formatDrm: (payload.formats ?? []).map((format) => format.has_drm === true),
+    host: source.host,
+  });
+  if (!verdict.eligible) throw refusalError(verdict.code);
+  if (verdict.dropFormatIndexes.length > 0) {
+    const drop = new Set(verdict.dropFormatIndexes);
+    payload = { ...payload, formats: (payload.formats ?? []).filter((_, i) => !drop.has(i)) };
+  }
+
   const isLive = Boolean(payload.is_live) || payload.live_status === 'is_live';
   const ttlSeconds = isLive ? LIVE_TTL_SECONDS : DEFAULT_TTL_SECONDS;
   const now = new Date();
@@ -355,6 +408,7 @@ function buildRecord(source: NormalisedSource, payload: YtDlpPayload): Extractio
     likeCount: numberOrNull(payload.like_count),
     isLive,
     ageLimit: payload.age_limit ?? 0,
+    availability: payload.availability ?? null,
     thumbnails,
     bestThumbnail: payload.thumbnail ?? thumbnails[thumbnails.length - 1]?.url ?? null,
     subtitles: tracks,
