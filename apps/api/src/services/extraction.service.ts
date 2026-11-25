@@ -165,7 +165,7 @@ export async function extractMedia(
 /** How long a refusal is remembered, so repeat pastes of the same link don't re-run yt-dlp. */
 const REFUSAL_TTL_SECONDS = 600;
 
-function isIneligibleCode(code: string): code is IneligibleCode {
+export function isIneligibleCode(code: string): code is IneligibleCode {
   return (INELIGIBLE_CODES as readonly string[]).includes(code);
 }
 
@@ -324,7 +324,10 @@ async function runExtraction(
   return buildRecord(source, payload);
 }
 
-export function translateExtractionError(err: unknown, source: NormalisedSource): AppError {
+export function translateExtractionError(
+  err: unknown,
+  source: Pick<NormalisedSource, 'platform'>,
+): AppError {
   if (!(err instanceof CommandError)) {
     return AppError.upstream('Extraction failed unexpectedly');
   }

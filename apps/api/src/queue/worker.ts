@@ -9,7 +9,13 @@ import { logger } from '../lib/logger.js';
 import { disconnectPrisma, prisma } from '../lib/prisma.js';
 import { createQueueConnection, disconnectRedis } from '../lib/redis.js';
 import { CommandError, assertNotFlag, runCommand } from '../lib/exec.js';
-import { extractMedia, findFormat } from '../services/extraction.service.js';
+import { normaliseSourceUrl } from '../lib/source-url.js';
+import {
+  extractMedia,
+  findFormat,
+  isIneligibleCode,
+  translateExtractionError,
+} from '../services/extraction.service.js';
 import {
   clearCancellation,
   isCancellationRequested,
@@ -413,7 +419,7 @@ async function runYtDlp({ payload, format, workDir, jobId, signal, log }: RunArg
     });
   } catch (err) {
     if (signal.aborted) throw err;
-    throw translateDownloadError(err, log);
+    throw translateDownloadError(err, log, payload.sourceUrl);
   }
 }
 
@@ -458,7 +464,7 @@ function toNumber(value: string | undefined): number | null {
  * yt-dlp exit codes are uniformly 1, so the message is all there is to go on.
  * Anything that will never succeed on a retry is marked unrecoverable.
  */
-function translateDownloadError(err: unknown, log: typeof logger): Error {
+function translateDownloadError(err: unknown, log: typeof logger, sourceUrl: string): Error {
   if (!(err instanceof CommandError)) {
     return err instanceof Error ? err : new Error('Download failed');
   }
@@ -470,6 +476,15 @@ function translateDownloadError(err: unknown, log: typeof logger): Error {
   if (stderr.includes('file is larger than max-filesize')) {
     return new UnrecoverableJobError('That file exceeds your plan\'s per-file size limit.');
   }
+
+  // The media can change between extraction and download (turned private, made
+  // members-only, ...). Reuse the extraction mapping so the refusal is the same
+  // typed code the API would have returned, recorded as "<CODE>: <message>".
+  const refusal = translateExtractionError(err, { platform: platformOf(sourceUrl) });
+  if (isIneligibleCode(refusal.code)) {
+    return new UnrecoverableJobError(`${refusal.code}: ${refusal.message}`);
+  }
+
   if (stderr.includes('drm') || stderr.includes('copyright')) {
     return new UnrecoverableJobError('That media is protected and cannot be downloaded.');
   }
@@ -489,6 +504,15 @@ function translateDownloadError(err: unknown, log: typeof logger): Error {
     return new Error('Media processing is unavailable on this worker');
   }
   return new Error('The download failed. The source may be temporarily unavailable.');
+}
+
+/** Log label only; never throws on a URL the normaliser would now reject. */
+function platformOf(sourceUrl: string): string {
+  try {
+    return normaliseSourceUrl(sourceUrl).platform;
+  } catch {
+    return 'unknown';
+  }
 }
 
 function describeFailure(err: unknown): string {
