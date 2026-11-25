@@ -133,7 +133,7 @@ describe('isBlockedHost', () => {
 
 describe('shared eligibility copy', () => {
   it('has copy for every code', () => {
-    expect(INELIGIBLE_CODES).toHaveLength(8);
+    expect(INELIGIBLE_CODES).toHaveLength(9);
     for (const code of INELIGIBLE_CODES) {
       expect(INELIGIBLE_COPY[code].title.length).toBeGreaterThan(0);
       expect(INELIGIBLE_COPY[code].body.length).toBeGreaterThan(0);

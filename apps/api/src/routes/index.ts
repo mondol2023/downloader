@@ -4,6 +4,7 @@ import authRoutes from './auth.routes.js';
 import billingRoutes from './billing.routes.js';
 import jobsRoutes from './jobs.routes.js';
 import mediaRoutes from './media.routes.js';
+import policyRoutes from '../features/restrictions/policy.routes.js';
 
 /**
  * Versioned API surface.
@@ -34,6 +35,8 @@ const writesNeedDatabase: RequestHandler = (req, res, next) => {
 // Path must stay `/auth` — the refresh cookie is scoped to `/api/v1/auth`.
 router.use('/auth', requireDatabase, authRoutes);
 router.use('/media', mediaRoutes);
+// Public, read-only and served from memory, so it stays up while Postgres is down.
+router.use('/policy', policyRoutes);
 router.use('/jobs', writesNeedDatabase, jobsRoutes);
 router.use('/billing', requireDatabase, billingRoutes);
 

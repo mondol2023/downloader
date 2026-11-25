@@ -12,7 +12,7 @@ import type {
   Thumbnail,
   Tier,
 } from '@media/shared';
-import { INELIGIBLE_CODES, evaluateFormatAccess, minimumTierFor, policyFor } from '@media/shared';
+import { INELIGIBLE_CODES } from '@media/shared';
 import { env } from '../config/env.js';
 import { keys, redis } from '../lib/redis.js';
 import { getDbHealth } from '../features/persistence/index.js';
@@ -21,6 +21,17 @@ import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { CommandError, assertNotFlag, runCommand } from '../lib/exec.js';
 import { evaluateEligibility, refusalError } from '../features/eligibility/index.js';
+import {
+  assertDurationAllowed,
+  assertExtractionOpen,
+  evaluateAccess,
+  requiredTierFor,
+  tierPolicyFor,
+} from '../features/restrictions/enforce.js';
+import { getPolicy } from '../features/restrictions/policy.current.js';
+import { extractWithRegionalFallback } from '../features/regions/regional-extract.js';
+import type { RegionCode } from '../features/regions/region.js';
+import { extractViaRegionalQueue } from '../queue/regional-queue.js';
 import { normaliseSourceUrl, platformFromHost, type NormalisedSource } from '../lib/source-url.js';
 
 /**
@@ -117,15 +128,32 @@ export interface ExtractionRecord {
   subtitleSources: Record<string, SubtitleSource>;
   fetchedAt: string;
   expiresAt: string;
+  /** Set only when a regional worker produced this record. */
+  region?: string;
 }
 
 const LIVE_TTL_SECONDS = 30;
 const DEFAULT_TTL_SECONDS = 6 * 60 * 60;
 const LOCK_TTL_MS = 90_000;
 
+/**
+ * Resolves a URL to a record. The runtime policy is applied on every call, cache hit or not:
+ * the platform switch inside `normaliseSourceUrl`, the extraction pause, and the duration cap, so
+ * a limit an admin tightens takes effect for records that were cached under the old one.
+ */
 export async function extractMedia(
   rawUrl: string,
-  options: { signal?: AbortSignal; force?: boolean } = {},
+  options: { signal?: AbortSignal; force?: boolean; userRegion?: RegionCode | null } = {},
+): Promise<ExtractionRecord> {
+  assertExtractionOpen();
+  const record = await resolveRecord(rawUrl, options);
+  assertDurationAllowed(record.media.durationSeconds);
+  return record;
+}
+
+async function resolveRecord(
+  rawUrl: string,
+  options: { signal?: AbortSignal; force?: boolean; userRegion?: RegionCode | null },
 ): Promise<ExtractionRecord> {
   const source = normaliseSourceUrl(rawUrl);
 
@@ -149,7 +177,11 @@ export async function extractMedia(
   }
 
   try {
-    const record = await runExtraction(source, options.signal);
+    const record = await extractWithRegionalFallback(source, options.userRegion ?? null, {
+      cfg: env,
+      local: () => runExtraction(source, options.signal),
+      regional: extractViaRegionalQueue,
+    });
     await writeCache(record);
     return record;
   } catch (err) {
@@ -372,7 +404,7 @@ export function buildRecord(source: NormalisedSource, payload: YtDlpPayload): Ex
     ageLimit: payload.age_limit ?? 0,
     formatDrm: (payload.formats ?? []).map((format) => format.has_drm === true),
     host: source.host,
-  });
+  }, getPolicy());
   if (!verdict.eligible) throw refusalError(verdict.code);
   if (verdict.dropFormatIndexes.length > 0) {
     const drop = new Set(verdict.dropFormatIndexes);
@@ -698,7 +730,7 @@ function numberOrNull(value: number | null | undefined): number | null {
  * The upstream URL is never included either way, so "visible" is not "usable".
  */
 export function gateRecord(record: ExtractionRecord, tier: Tier): ExtractionResult {
-  const policy = policyFor(tier);
+  const platform = record.media.platform;
 
   const formats: GatedMediaFormat[] = record.formats.map((format) => {
     const constraint = {
@@ -706,12 +738,12 @@ export function gateRecord(record: ExtractionRecord, tier: Tier): ExtractionResu
       fps: format.fps,
       sizeBytes: format.sizeBytes,
     };
-    const { allowed, reason } = evaluateFormatAccess(tier, constraint);
+    const { allowed, reason } = evaluateAccess(tier, constraint, platform);
     return {
       ...format,
       allowed,
       lockReason: reason,
-      requiredTier: allowed ? tier : minimumTierFor(constraint),
+      requiredTier: allowed ? tier : requiredTierFor(constraint, platform),
     };
   });
 
@@ -753,20 +785,19 @@ export function findFormat(record: ExtractionRecord, formatId: string): MediaFor
  * than trusting the `allowed` flag the client was shown — that flag was
  * computed for whatever tier the caller had when the page rendered.
  */
-export function assertFormatAllowed(format: MediaFormat, tier: Tier): void {
-  const { allowed, reason } = evaluateFormatAccess(tier, {
-    height: format.height,
-    fps: format.fps,
-    sizeBytes: format.sizeBytes,
-  });
+export function assertFormatAllowed(format: MediaFormat, tier: Tier, platform?: string): void {
+  const { allowed, reason } = evaluateAccess(
+    tier,
+    { height: format.height, fps: format.fps, sizeBytes: format.sizeBytes },
+    platform,
+  );
   if (allowed) return;
 
-  const required = minimumTierFor({
-    height: format.height,
-    fps: format.fps,
-    sizeBytes: format.sizeBytes,
-  });
-  const policy = policyFor(tier);
+  const required = requiredTierFor(
+    { height: format.height, fps: format.fps, sizeBytes: format.sizeBytes },
+    platform,
+  );
+  const policy = tierPolicyFor(tier, platform);
 
   const message =
     reason === 'FILE_SIZE'

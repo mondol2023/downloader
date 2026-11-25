@@ -8,6 +8,7 @@ export const INELIGIBLE_CODES = [
   'SOURCE_LIVE',
   'SOURCE_BLOCKED_DOMAIN',
   'SOURCE_GEOBLOCKED',
+  'SOURCE_PLATFORM_DISABLED',
 ] as const;
 
 export type IneligibleCode = (typeof INELIGIBLE_CODES)[number];
@@ -44,5 +45,9 @@ export const INELIGIBLE_COPY: Record<IneligibleCode, { title: string; body: stri
   SOURCE_GEOBLOCKED: {
     title: "This video isn't available in your region",
     body: 'The uploader or rights-holder restricts it.',
+  },
+  SOURCE_PLATFORM_DISABLED: {
+    title: 'This site is currently unavailable',
+    body: 'Downloads from this site are switched off right now. Please try again later.',
   },
 };

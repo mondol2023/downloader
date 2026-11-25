@@ -1,4 +1,5 @@
 import http from 'node:http';
+import path from 'node:path';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
@@ -7,7 +8,7 @@ import helmet from 'helmet';
 import pinoHttp from 'pino-http';
 import { env, isProd } from './config/env.js';
 import { logger } from './lib/logger.js';
-import { disconnectPrisma } from './lib/prisma.js';
+import { disconnectPrisma, prisma } from './lib/prisma.js';
 import { disconnectRedis, redis } from './lib/redis.js';
 import {
   getDbHealth,
@@ -15,6 +16,7 @@ import {
   startOutboxDrainer,
   startSheetsMirrorFromEnv,
 } from './features/persistence/index.js';
+import { startPolicyStore, stopPolicyStore } from './features/restrictions/policy.store.js';
 import { closeQueue } from './queue/queues.js';
 import { attachIdentity, csrfGuard } from './middleware/identity.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
@@ -184,6 +186,12 @@ const stopDbProbe = startDbHealthProbe();
 const stopOutboxDrainer = startOutboxDrainer();
 // Optional Google Sheets copy of the ledger (no-op unless configured).
 const stopSheetsMirror = startSheetsMirrorFromEnv();
+// Runtime restriction policy: database → snapshot file → code defaults, refreshed on `policy:changed`.
+void startPolicyStore({
+  prisma,
+  redis,
+  snapshotPath: path.join(path.resolve(env.STORAGE_DIR), 'policy.snapshot.json'),
+}).catch((err: unknown) => logger.error({ err }, 'Policy store failed to start; using code defaults'));
 
 const server = http.createServer(app);
 // Slightly above a typical 60s ALB idle timeout so the proxy, not the origin,
@@ -229,6 +237,7 @@ async function shutdown(signal: string): Promise<void> {
   stopDbProbe();
   stopOutboxDrainer();
   stopSheetsMirror();
+  await stopPolicyStore().catch(() => undefined);
 
   const forceExit = setTimeout(() => {
     logger.error('Graceful shutdown timed out; forcing exit');

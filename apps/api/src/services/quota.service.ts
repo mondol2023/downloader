@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { QuotaSnapshot, Tier } from '@media/shared';
-import { formatCount, isUnlimited, policyFor } from '@media/shared';
+import { formatCount, isUnlimited } from '@media/shared';
+import { tierPolicyFor } from '../features/restrictions/enforce.js';
 import type { RequestIdentity } from '../types/express.js';
 import { keys, redis } from '../lib/redis.js';
 import { getDbHealth, recordLedger } from '../features/persistence/index.js';
@@ -151,7 +152,7 @@ export interface QuotaReservation {
  * can deep-link the right upsell.
  */
 export async function reserveDownload(identity: QuotaIdentity): Promise<QuotaReservation> {
-  const policy = policyFor(identity.tier);
+  const policy = tierPolicyFor(identity.tier);
   const reservationId = randomUUID();
   const reservation: QuotaReservation = {
     id: reservationId,
@@ -313,7 +314,7 @@ export async function commitDownload(input: {
 }
 
 export async function getQuotaSnapshot(identity: QuotaIdentity): Promise<QuotaSnapshot> {
-  const policy = policyFor(identity.tier);
+  const policy = tierPolicyFor(identity.tier);
 
   if (isUnlimited(policy.dailyDownloads) && isUnlimited(policy.maxConcurrentJobs)) {
     return {
@@ -365,7 +366,7 @@ export async function getQuotaSnapshot(identity: QuotaIdentity): Promise<QuotaSn
  * the worker re-checks the real Content-Length before writing bytes to disk.
  */
 export function assertSizeAllowed(tier: Tier, sizeBytes: number | null): void {
-  const policy = policyFor(tier);
+  const policy = tierPolicyFor(tier);
   if (sizeBytes == null || isUnlimited(policy.maxFileSizeBytes)) return;
   if (sizeBytes > policy.maxFileSizeBytes) {
     throw AppError.payloadTooLarge(

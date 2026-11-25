@@ -122,6 +122,8 @@ model Job {
   mediaId       String
   platform      String
   mediaTitle    String
+  /// Region the media was extracted in; signed URLs are region-bound, so the download must run there.
+  region        String?
   formatId      String
   formatLabel   String
   audioFormat   String?
@@ -226,4 +228,18 @@ model ProcessedWebhook {
   processedAt DateTime @default(now())
 
   @@index([processedAt])
+}
+
+// One row per published restriction policy. Exactly one row is active; its `overrides` are
+// layered over the code defaults (features/restrictions/restrictions.config.ts) at runtime.
+model PolicyVersion {
+  id          String   @id @default(cuid())
+  version     Int      @unique
+  overrides   Json
+  note        String
+  active      Boolean  @default(false)
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@index([active])
 }

@@ -31,6 +31,7 @@ vi.mock('../../../src/config/env.js', () => ({
     WORKER_CONCURRENCY_PRO: 1,
     ARTIFACT_TTL: 3600,
     EXTRACTION_TIMEOUT_MS: 1000,
+    WORKER_ROLE: ['download'],
   },
 }));
 

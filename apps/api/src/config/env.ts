@@ -48,7 +48,35 @@ const schema = z.object({
   STREAM_GRANT_TTL: z.coerce.number().int().positive().default(21_600),
   /** Empty = allow any public host (needed for 1000+ extractors). */
   ALLOWED_STREAM_HOSTS: csv,
+  /** Extra hosts to refuse. Only read on first boot, to seed policy version 1; after that the admin policy owns it. */
+  BLOCKED_HOSTS_EXTRA: csv,
 
+  /** True only when the API sits behind a proxy/CDN that sets the country header. */
+  TRUST_PROXY: bool.default(false),
+  /** This deployment's region (e.g. eu). */
+  REGION: z.string().trim().toLowerCase().default('default'),
+  /** Regions that have workers deployed. */
+  WORKER_REGIONS: csv.transform((v) => v.map((r) => r.toLowerCase())),
+  COUNTRY_HEADER: z.string().default('cf-ipcountry'),
+  /** JSON map of ISO country -> region, e.g. {"BD":"bd","IN":"in","DE":"eu"}. */
+  COUNTRY_TO_REGION: z
+    .string()
+    .default('{}')
+    .transform((v, ctx) => {
+      try {
+        const o = JSON.parse(v);
+        if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error('not an object');
+        return Object.fromEntries(
+          Object.entries(o).map(([k, r]) => [k.toUpperCase(), String(r).toLowerCase()]),
+        ) as Record<string, string>;
+      } catch {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'COUNTRY_TO_REGION must be a JSON object' });
+        return z.NEVER;
+      }
+    }),
+
+  /** Which queues this worker process consumes. */
+  WORKER_ROLE: csv.transform((v) => (v.length ? v.map((r) => r.toLowerCase()) : ['download'])),
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(2),
   WORKER_CONCURRENCY_PRO: z.coerce.number().int().positive().default(4),
 

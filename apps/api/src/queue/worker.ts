@@ -3,11 +3,12 @@ import path from 'node:path';
 import { DelayedError, Worker, type Job as BullJob } from 'bullmq';
 import type { Job as JobRow, JobState as DbJobState } from '@prisma/client';
 import type { JobProgress, JobState, MediaFormat } from '@media/shared';
-import { isUnlimited, policyFor } from '@media/shared';
+import { isUnlimited } from '@media/shared';
 import { env } from '../config/env.js';
+import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { disconnectPrisma, prisma } from '../lib/prisma.js';
-import { createQueueConnection, disconnectRedis } from '../lib/redis.js';
+import { createQueueConnection, disconnectRedis, redis } from '../lib/redis.js';
 import { CommandError, assertNotFlag, runCommand } from '../lib/exec.js';
 import { normaliseSourceUrl } from '../lib/source-url.js';
 import {
@@ -27,7 +28,10 @@ import {
   startSheetsMirrorFromEnv,
 } from '../features/persistence/index.js';
 import { commitDownload, release, releaseSlot } from '../services/quota.service.js';
+import { assertDownloadsOpen, assertPlatformAllowed, tierPolicyFor } from '../features/restrictions/enforce.js';
+import { startPolicyStore, stopPolicyStore } from '../features/restrictions/policy.store.js';
 import { MEDIA_QUEUE_NAME, type MediaJobPayload } from './queues.js';
+import { startRegionalExtractWorker } from './regional-queue.js';
 
 /**
  * The heavy end of the platform.
@@ -165,6 +169,9 @@ async function processMediaJob(job: BullJob<MediaJobPayload>): Promise<void> {
       return;
     }
 
+    // The admin may have paused downloads or switched the site off since this was queued.
+    recheckPolicy(payload.sourceUrl);
+
     await transition(jobId, 'EXTRACTING', {
       startedAt: row.startedAt ?? new Date(),
       attempts: attempt,
@@ -174,7 +181,7 @@ async function processMediaJob(job: BullJob<MediaJobPayload>): Promise<void> {
 
     // Cached in Redis from the enqueue-time extraction in the common case, so
     // this is usually free; it re-runs only if the cache expired underneath us.
-    const record = await extractMedia(payload.sourceUrl, { signal: controller.signal });
+    const record = await extractMediaOrRefuse(payload.sourceUrl, controller.signal);
     const format = findFormat(record, payload.formatId);
 
     await mkdir(workDir, { recursive: true });
@@ -196,7 +203,7 @@ async function processMediaJob(job: BullJob<MediaJobPayload>): Promise<void> {
 
     // yt-dlp's `--max-filesize` only knows the *declared* size, which many
     // extractors get wrong or omit. This is the check that actually holds.
-    const policy = policyFor(payload.tier);
+    const policy = tierPolicyFor(payload.tier);
     if (!isUnlimited(policy.maxFileSizeBytes) && artifact.bytes > policy.maxFileSizeBytes) {
       await rm(workDir, { recursive: true, force: true });
       throw new UnrecoverableJobError(
@@ -296,6 +303,34 @@ async function processMediaJob(job: BullJob<MediaJobPayload>): Promise<void> {
   }
 }
 
+/**
+ * Re-reads the runtime policy before any work starts. A job accepted before the admin paused
+ * downloads, or switched its platform off, fails with the same typed code the API would have
+ * returned. It is permanent, so the reservation is released and the user is not charged.
+ */
+function recheckPolicy(sourceUrl: string): void {
+  try {
+    assertDownloadsOpen();
+    const source = normaliseSourceUrl(sourceUrl); // also applies the platform and blocked-host rules
+    assertPlatformAllowed(source.platform, 'download');
+  } catch (err) {
+    if (err instanceof AppError) throw new UnrecoverableJobError(`${err.code}: ${err.message}`);
+    throw err;
+  }
+}
+
+/** A typed 4xx refusal (policy, eligibility, duration) will not change on retry. */
+async function extractMediaOrRefuse(sourceUrl: string, signal: AbortSignal) {
+  try {
+    return await extractMedia(sourceUrl, { signal });
+  } catch (err) {
+    if (err instanceof AppError && (err.status === 403 || err.status === 422 || err.status === 451)) {
+      throw new UnrecoverableJobError(`${err.code}: ${err.message}`);
+    }
+    throw err;
+  }
+}
+
 /** Distinguishes "will never work" from "try again" so retries are not wasted. */
 class UnrecoverableJobError extends Error {
   constructor(message: string) {
@@ -329,7 +364,7 @@ async function runYtDlp({ payload, format, workDir, jobId, signal, log }: RunArg
     throw new UnrecoverableJobError('That rendition is no longer selectable');
   }
 
-  const policy = policyFor(payload.tier);
+  const policy = tierPolicyFor(payload.tier);
 
   const args = [
     '--no-warnings',
@@ -634,6 +669,13 @@ const stopDbProbe = startDbHealthProbe();
 const stopOutboxDrainer = startOutboxDrainer();
 const stopSheetsMirror = startSheetsMirrorFromEnv();
 
+// Same runtime policy as the API: re-read before each download, refreshed on `policy:changed`.
+void startPolicyStore({
+  prisma,
+  redis,
+  snapshotPath: path.join(STORAGE_ROOT, 'policy.snapshot.json'),
+}).catch((err: unknown) => logger.error({ err }, 'Policy store failed to start; using code defaults'));
+
 worker.on('ready', () => {
   logger.info(
     {
@@ -708,6 +750,7 @@ async function shutdown(signal: string): Promise<void> {
   stopDbProbe();
   stopOutboxDrainer();
   stopSheetsMirror();
+  await stopPolicyStore().catch(() => undefined);
 
   const forceExit = setTimeout(() => {
     logger.error('Worker shutdown timed out; forcing exit');
@@ -715,6 +758,7 @@ async function shutdown(signal: string): Promise<void> {
   }, 60_000);
   forceExit.unref();
 
+  await regionalWorker?.close().catch(() => undefined);
   await worker.close().catch((err: unknown) => logger.error({ err }, 'Worker close failed'));
   await connection.quit().catch(() => undefined);
   await disconnectRedis();
@@ -723,6 +767,12 @@ async function shutdown(signal: string): Promise<void> {
   logger.info('Worker shutdown complete');
   process.exit(0);
 }
+
+// Regional extraction: only when this process is configured to serve `extract:<REGION>`.
+const regionalWorker = env.WORKER_ROLE.includes('extract')
+  ? startRegionalExtractWorker((url) => extractMedia(url))
+  : null;
+if (regionalWorker) logger.info({ queue: `extract:${env.REGION}` }, 'Regional extract worker started');
 
 process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));

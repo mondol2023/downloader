@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { policyFor } from '@media/shared';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { toWebVtt } from '../lib/subtitles.js';
@@ -16,6 +15,9 @@ import {
 } from '../services/extraction.service.js';
 import { assertFetchableUrl, mintPlaybackGrant } from '../services/stream.service.js';
 import { getQuotaSnapshot, quotaIdentity } from '../services/quota.service.js';
+import { env } from '../config/env.js';
+import { resolveUserRegion } from '../features/regions/region.js';
+import { assertPlatformAllowed, tierPolicyFor } from '../features/restrictions/enforce.js';
 
 const router = Router();
 
@@ -45,6 +47,7 @@ router.post(
     const record = await extractMedia(input.url, {
       signal: controller.signal,
       force: input.refresh === true,
+      userRegion: resolveUserRegion(req, env),
     });
 
     const result = gateRecord(record, req.identity.tier);
@@ -63,7 +66,7 @@ router.post(
     res.json({
       data: {
         ...result,
-        policy: policyFor(req.identity.tier),
+        policy: tierPolicyFor(req.identity.tier, record.media.platform),
         quota: await getQuotaSnapshot(quotaIdentity(req.identity)),
       },
     });
@@ -96,14 +99,15 @@ router.post(
       .object({ url: z.string().min(1).max(2048), formatId: z.string().min(1).max(128) })
       .parse(req.body);
 
-    const policy = policyFor(req.identity.tier);
+    const policy = tierPolicyFor(req.identity.tier);
     if (!policy.allowStreaming) {
       throw AppError.forbidden('In-app playback is not available on your plan', 'FREE');
     }
 
     const record = await extractMedia(input.url);
     const format = findFormat(record, input.formatId);
-    assertFormatAllowed(format, req.identity.tier);
+    assertPlatformAllowed(record.media.platform, 'playback');
+    assertFormatAllowed(format, req.identity.tier, record.media.platform);
 
     const grant = mintPlaybackGrant(record, format, {
       sub: req.identity.subject,

@@ -3,6 +3,8 @@ import { isPrivateHostname } from '@media/shared';
 import { AppError } from './errors.js';
 import { isBlockedHost } from '../features/eligibility/blocked-hosts.js';
 import { refusalError } from '../features/eligibility/refusal.js';
+import { assertPlatformAllowed } from '../features/restrictions/enforce.js';
+import { getPolicy } from '../features/restrictions/policy.current.js';
 
 /**
  * Normalises and vets a user-supplied media URL before it is ever handed to
@@ -76,7 +78,9 @@ export function normaliseSourceUrl(input: string): NormalisedSource {
   if (isPrivateHostname(host)) {
     throw AppError.badRequest('That host is not reachable from this service');
   }
-  if (isBlockedHost(host)) throw refusalError('SOURCE_BLOCKED_DOMAIN');
+  if (isBlockedHost(host, getPolicy())) throw refusalError('SOURCE_BLOCKED_DOMAIN');
+  const platform = platformFromHost(host);
+  assertPlatformAllowed(platform, 'extract');
 
   // Rebuild rather than mutate, so nothing exotic survives.
   const canonicalUrl = new URL(`${parsed.protocol}//${host}${parsed.pathname}`);
@@ -100,7 +104,7 @@ export function normaliseSourceUrl(input: string): NormalisedSource {
     original: trimmed,
     canonical,
     host,
-    platform: platformFromHost(host),
+    platform,
     mediaId: createHash('sha256').update(canonical).digest('hex').slice(0, 24),
   };
 }

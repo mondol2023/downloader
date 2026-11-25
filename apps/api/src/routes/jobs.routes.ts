@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Router } from 'express';
 import { z } from 'zod';
-import { AUDIO_FORMATS, policyFor, type AudioFormat } from '@media/shared';
+import { AUDIO_FORMATS, type AudioFormat } from '@media/shared';
 import { env } from '../config/env.js';
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../lib/errors.js';
@@ -31,6 +31,11 @@ import {
 } from '../services/job.service.js';
 import { enqueueMediaJob, removeQueuedJob } from '../queue/queues.js';
 import { recordAudit } from '../services/user.service.js';
+import {
+  assertDownloadsOpen,
+  assertPlatformAllowed,
+  tierPolicyFor,
+} from '../features/restrictions/enforce.js';
 
 const router = Router();
 
@@ -57,12 +62,17 @@ router.post(
   asyncHandler(async (req, res) => {
     const input = downloadRequest.parse(req.body);
     const tier = req.identity.tier;
-    const policy = policyFor(tier);
+
+    // Maintenance and the downloads switch come first: nothing below may spend quota.
+    assertDownloadsOpen();
 
     const record = await extractMedia(input.url);
     const format = findFormat(record, input.formatId);
+    const platform = record.media.platform;
+    const policy = tierPolicyFor(tier, platform);
 
-    assertFormatAllowed(format, tier);
+    assertPlatformAllowed(platform, 'download');
+    assertFormatAllowed(format, tier, platform);
     assertSizeAllowed(tier, format.sizeBytes);
 
     if (input.audioFormat) {
@@ -98,6 +108,7 @@ router.post(
           mediaId: record.media.id,
           platform: record.media.platform,
           mediaTitle: record.media.title,
+          region: record.region ?? null,
           formatId: format.id,
           formatLabel: input.audioFormat
             ? `${format.label} → ${input.audioFormat.toUpperCase()}`
