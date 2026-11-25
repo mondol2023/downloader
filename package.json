@@ -8,7 +8,7 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "concurrently -n shared,api,worker -c gray,blue,magenta \"npm run dev -w @media/shared\" \"npm run dev -w @media/api\" \"npm run dev:worker -w @media/api\"",
+    "dev": "concurrently -n shared,api,worker,web -c gray,blue,magenta,green \"npm run dev -w @media/shared\" \"npm run dev -w @media/api\" \"npm run dev:worker -w @media/api\" \"npm run dev -w @media/web\"",
     "build": "npm run build -w @media/shared && npm run build -w @media/api && npm run build -w @media/web --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
