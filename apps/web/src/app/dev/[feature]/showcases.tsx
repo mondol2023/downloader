@@ -1,6 +1,7 @@
 "use client";
 import { useState, type ReactNode } from "react";
 import { ApiError } from "@/lib/api";
+import { AdminShell, DashboardView } from "@/features/admin";
 import { AuthForm } from "@/features/auth";
 import { BillingView, PricingView } from "@/features/billing";
 import { ExtractDeckView, type DeckStatus } from "@/features/extract";
@@ -9,7 +10,7 @@ import { QuotaMeter } from "@/features/history";
 import { JobCard, JobListView } from "@/features/jobs";
 import { PlayerView } from "@/features/player";
 import type { DevFeature } from "./features";
-import { MOCK_GRANT, MOCK_PLANS, MOCK_QUOTA, mockExtract, mockJob } from "@/mocks/media";
+import { MOCK_ADMIN_STATS, MOCK_GRANT, MOCK_PLANS, MOCK_QUOTA, mockExtract, mockJob } from "@/mocks/media";
 
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -182,6 +183,26 @@ function HistoryStates() {
   );
 }
 
+function AdminStates() {
+  return (
+    <>
+      <Section title="shell + dashboard">
+        <div className="flex min-h-96">
+          <AdminShell pathname="/admin">
+            <DashboardView stats={MOCK_ADMIN_STATS} />
+          </AdminShell>
+        </div>
+      </Section>
+      <Section title="empty">
+        <DashboardView stats={{ ...MOCK_ADMIN_STATS, jobsToday: {}, extractsByPlatform: {}, refusalsByCode: {}, queueDepth: { waiting: 0, active: 0, delayed: 0, failed: 0 } }} />
+      </Section>
+      <Section title="loading">
+        <DashboardView loading />
+      </Section>
+    </>
+  );
+}
+
 const VIEWS: Record<DevFeature, () => ReactNode> = {
   extract: () => <ExtractStates />,
   formats: () => <FormatsStates />,
@@ -190,6 +211,7 @@ const VIEWS: Record<DevFeature, () => ReactNode> = {
   auth: () => <AuthStates />,
   billing: () => <BillingStates />,
   history: () => <HistoryStates />,
+  admin: () => <AdminStates />,
 };
 
 export function Showcase({ feature }: { feature: DevFeature }) {

@@ -117,6 +117,7 @@ export function toAuthUser(user: User & { subscription?: Subscription | null }):
     email: user.email,
     displayName: user.displayName,
     tier: user.tier as Tier,
+    role: user.role,
     emailVerified: user.emailVerified,
     subscriptionStatus: user.subscription?.status ?? null,
     subscriptionEndsAt: user.subscription?.currentPeriodEnd?.toISOString() ?? null,

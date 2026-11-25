@@ -153,11 +153,14 @@ export interface DownloadRequest {
   subtitleLang?: string;
 }
 
+export type UserRole = 'USER' | 'EDITOR' | 'ADMIN';
+
 export interface AuthUser {
   id: string;
   email: string;
   displayName: string | null;
   tier: Tier;
+  role: UserRole;
   emailVerified: boolean;
   subscriptionStatus: string | null;
   subscriptionEndsAt: string | null;

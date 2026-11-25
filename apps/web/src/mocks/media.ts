@@ -1,3 +1,4 @@
+import type { AdminStats } from "@/features/admin/types";
 // Relative imports only: Playwright specs import these fixtures too.
 import type { GatedMediaFormat, JobSummary, QuotaSnapshot, SubtitleTrack } from "@media/shared";
 import type { ExtractResponse, MeResponse, PlanTier, PlansResponse, PlaybackGrantResponse } from "../lib/types";
@@ -102,7 +103,7 @@ export const MOCK_GRANT: PlaybackGrantResponse = {
 
 export const MOCK_GUEST_ME: MeResponse = { user: null, tier: "GUEST", quota: MOCK_QUOTA };
 export const MOCK_USER_ME: MeResponse = {
-  user: { id: "u1", email: "ada@example.com", displayName: "Ada", tier: "FREE", emailVerified: true, subscriptionStatus: null, subscriptionEndsAt: null, createdAt: "2026-11-01T00:00:00.000Z" },
+  user: { id: "u1", email: "ada@example.com", displayName: "Ada", tier: "FREE", role: "USER", emailVerified: true, subscriptionStatus: null, subscriptionEndsAt: null, createdAt: "2026-11-01T00:00:00.000Z" },
   tier: "FREE",
   quota: { ...MOCK_QUOTA, tier: "FREE", downloadsLimit: 10, downloadsUsed: 4, maxHeight: 1080 },
 };
@@ -150,3 +151,17 @@ export function mockJob(state: JobSummary["state"], over: Partial<JobSummary> = 
     ...over,
   };
 }
+
+export const MOCK_ADMIN_ME: MeResponse = {
+  ...MOCK_USER_ME,
+  user: { ...MOCK_USER_ME.user!, id: "a1", email: "root@example.com", displayName: "Root", role: "ADMIN" },
+};
+
+export const MOCK_ADMIN_STATS: AdminStats = {
+  jobsToday: { completed: 42, failed: 3, running: 2, queued: 1 },
+  extractsByPlatform: { youtube: 120, vimeo: 31, tiktok: 12 },
+  refusalsByCode: { SOURCE_PRIVATE: 14, SOURCE_DRM: 9, SOURCE_PLATFORM_DISABLED: 4, TOO_MANY_REQUESTS: 2 },
+  queueDepth: { waiting: 1, active: 2, delayed: 0, failed: 3 },
+  health: { status: "ok", db: "up", redis: "up", tools: {}, region: "eu-1" },
+  windowHours: 24,
+};
