@@ -38,6 +38,10 @@ const schema = z.object({
   EXTRACTION_TIMEOUT_MS: z.coerce.number().int().positive().default(45_000),
   YTDLP_COOKIES_FILE: z.string().optional(),
 
+  /** Optional Google Sheets ledger mirror; off unless BOTH are set. Key file must live outside the repo. */
+  SHEETS_SPREADSHEET_ID: z.string().optional(),
+  GOOGLE_SERVICE_ACCOUNT_FILE: z.string().optional(),
+
   STORAGE_DIR: z.string().default('./storage'),
   ARTIFACT_TTL: z.coerce.number().int().positive().default(86_400),
   /** How long a minted stream grant stays valid. Short: playback re-mints. */

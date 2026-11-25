@@ -13,3 +13,10 @@ export {
   type OutboxKind,
   type OutboxRecord,
 } from './outbox.js';
+export {
+  createSheetsSink,
+  startSheetsMirror,
+  startSheetsMirrorFromEnv,
+  type LedgerSink,
+  type SheetsClientLike,
+} from './sheets-sink.js';

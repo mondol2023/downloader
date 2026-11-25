@@ -1,6 +1,7 @@
 import { appendFile, mkdir, readFile, readdir, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { getDbHealth, onDbHealthChange } from './db-health.js';
+import { enqueueMirror } from './sheets-sink.js';
 
 /**
  * Durable fallback for ledger-style writes (download log, audit trail).
@@ -142,12 +143,15 @@ export async function recordLedger(rec: OutboxRecord): Promise<'db' | 'outbox'> 
   if (getDbHealth().up) {
     try {
       await writeToDb(rec);
+      enqueueMirror(rec);
       return 'db';
     } catch (err) {
       log('warn', { err, kind: rec.kind, id: rec.id }, 'Ledger DB write failed; using outbox');
     }
   }
   await appendToOutbox(rec);
+  // Mirrored when first recorded, not when the outbox later drains, so the sheet isn't delayed by an outage.
+  enqueueMirror(rec);
   return 'outbox';
 }
 

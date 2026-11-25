@@ -9,7 +9,12 @@ import { env, isProd } from './config/env.js';
 import { logger } from './lib/logger.js';
 import { disconnectPrisma } from './lib/prisma.js';
 import { disconnectRedis, redis } from './lib/redis.js';
-import { getDbHealth, startDbHealthProbe, startOutboxDrainer } from './features/persistence/index.js';
+import {
+  getDbHealth,
+  startDbHealthProbe,
+  startOutboxDrainer,
+  startSheetsMirrorFromEnv,
+} from './features/persistence/index.js';
 import { closeQueue } from './queue/queues.js';
 import { attachIdentity, csrfGuard } from './middleware/identity.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
@@ -177,6 +182,8 @@ app.use(errorHandler);
 const stopDbProbe = startDbHealthProbe();
 // Replay ledger/audit rows queued during an outage once the DB is back.
 const stopOutboxDrainer = startOutboxDrainer();
+// Optional Google Sheets copy of the ledger (no-op unless configured).
+const stopSheetsMirror = startSheetsMirrorFromEnv();
 
 const server = http.createServer(app);
 // Slightly above a typical 60s ALB idle timeout so the proxy, not the origin,
@@ -221,6 +228,7 @@ async function shutdown(signal: string): Promise<void> {
   clearInterval(pruneTimer);
   stopDbProbe();
   stopOutboxDrainer();
+  stopSheetsMirror();
 
   const forceExit = setTimeout(() => {
     logger.error('Graceful shutdown timed out; forcing exit');

@@ -15,7 +15,11 @@ import {
   isCancellationRequested,
   publishProgress,
 } from '../services/job.service.js';
-import { startDbHealthProbe, startOutboxDrainer } from '../features/persistence/index.js';
+import {
+  startDbHealthProbe,
+  startOutboxDrainer,
+  startSheetsMirrorFromEnv,
+} from '../features/persistence/index.js';
 import { commitDownload, release, releaseSlot } from '../services/quota.service.js';
 import { MEDIA_QUEUE_NAME, type MediaJobPayload } from './queues.js';
 
@@ -604,6 +608,7 @@ worker.on('error', (err) => {
 // The worker writes the download ledger, so it needs the same outage fallback as the API.
 const stopDbProbe = startDbHealthProbe();
 const stopOutboxDrainer = startOutboxDrainer();
+const stopSheetsMirror = startSheetsMirrorFromEnv();
 
 worker.on('ready', () => {
   logger.info(
@@ -678,6 +683,7 @@ async function shutdown(signal: string): Promise<void> {
   clearInterval(sweepTimer);
   stopDbProbe();
   stopOutboxDrainer();
+  stopSheetsMirror();
 
   const forceExit = setTimeout(() => {
     logger.error('Worker shutdown timed out; forcing exit');

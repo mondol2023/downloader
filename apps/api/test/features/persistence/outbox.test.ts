@@ -168,6 +168,36 @@ describe('drainOutbox', () => {
   });
 });
 
+describe('sheets mirror hook', () => {
+  it('recordLedger feeds the running mirror on both the db and the outbox path', async () => {
+    const { startSheetsMirror } = await import('../../../src/features/persistence/sheets-sink.js');
+    const write = vi.fn(async () => undefined);
+    const stop = startSheetsMirror({ write }, { flushMs: 10 });
+    try {
+      createMany.mockResolvedValueOnce({ count: 1 });
+      await recordLedger(rec('via-db'));
+      createMany.mockRejectedValueOnce(new Error('down'));
+      await recordLedger(rec('via-outbox'));
+
+      await vi.waitFor(() => expect(write).toHaveBeenCalled());
+      const ids = (write.mock.calls as unknown as OutboxRecord[][][]).flatMap((c) => c[0]!.map((r) => r.id));
+      expect(ids).toEqual(['via-db', 'via-outbox']);
+    } finally {
+      stop();
+    }
+  });
+
+  it('startSheetsMirrorFromEnv is a no-op unless both env keys are set', async () => {
+    const { startSheetsMirrorFromEnv } = await import('../../../src/features/persistence/sheets-sink.js');
+    delete process.env.SHEETS_SPREADSHEET_ID;
+    delete process.env.GOOGLE_SERVICE_ACCOUNT_FILE;
+    expect(startSheetsMirrorFromEnv()).toBeTypeOf('function');
+    // enqueue stays a no-op => nothing queued, nothing to flush
+    const { enqueueMirror } = await import('../../../src/features/persistence/sheets-sink.js');
+    expect(() => enqueueMirror(rec('x'))).not.toThrow();
+  });
+});
+
 describe('BigInt round trip', () => {
   it('bytes is serialized as a string, then parsed back to bigint', async () => {
     createMany.mockRejectedValue(new Error('down'));
