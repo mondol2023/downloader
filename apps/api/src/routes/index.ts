@@ -5,6 +5,7 @@ import billingRoutes from './billing.routes.js';
 import jobsRoutes from './jobs.routes.js';
 import mediaRoutes from './media.routes.js';
 import adminRouter from '../features/admin/admin.router.js';
+import cmsPublic from '../features/cms/cms.public.js';
 import policyRoutes from '../features/restrictions/policy.routes.js';
 
 /**
@@ -38,6 +39,8 @@ router.use('/auth', requireDatabase, authRoutes);
 router.use('/media', mediaRoutes);
 // Public, read-only and served from memory, so it stays up while Postgres is down.
 router.use('/policy', policyRoutes);
+// Published CMS content; pages and blocks need Postgres, uploaded images are plain files.
+router.use('/cms', cmsPublic);
 router.use('/jobs', writesNeedDatabase, jobsRoutes);
 router.use('/billing', requireDatabase, billingRoutes);
 // Role is checked per-router (EDITOR for /admin/cms, ADMIN for the rest) against the database.

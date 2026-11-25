@@ -9,6 +9,7 @@ import usersAdmin from './users.admin.js';
 import jobsAdmin from './jobs.admin.js';
 import auditAdmin from './audit.admin.js';
 import statsAdmin from './stats.admin.js';
+import cmsAdmin from '../cms/cms.admin.js';
 
 /** 60 requests / minute / admin user, on top of the global per-IP limiter. */
 export const adminRateLimit = rateLimit({
@@ -21,6 +22,7 @@ export const adminRateLimit = rateLimit({
 /** Everything under /admin/cms is open to EDITOR and ADMIN (Phase 9). */
 export const cmsRouter = Router();
 cmsRouter.use(requireRole('EDITOR'));
+cmsRouter.use(cmsAdmin);
 
 /** Everything else under /admin is ADMIN only. */
 export const adminOnlyRouter = Router();

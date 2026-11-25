@@ -37,7 +37,7 @@ export interface Reply {
 
 export async function call(
   router: Router,
-  method: 'GET' | 'POST' | 'PATCH',
+  method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
   path: string,
   body?: unknown,
   user?: string,

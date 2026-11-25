@@ -50,6 +50,9 @@ const schema = z.object({
   ARTIFACT_TTL: z.coerce.number().int().positive().default(86_400),
   /** How long a minted stream grant stays valid. Short: playback re-mints. */
   STREAM_GRANT_TTL: z.coerce.number().int().positive().default(21_600),
+  /** Where CMS images are served from; the sanitiser keeps `<img>` only under this origin. Defaults to the API's own asset route. */
+  CMS_ASSET_ORIGIN: z.string().url().optional(),
+  CMS_MAX_UPLOAD_MB: z.coerce.number().positive().default(5),
   /** Empty = allow any public host (needed for 1000+ extractors). */
   ALLOWED_STREAM_HOSTS: csv,
   /** Extra hosts to refuse. Only read on first boot, to seed policy version 1; after that the admin policy owns it. */

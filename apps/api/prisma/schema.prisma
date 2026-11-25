@@ -279,3 +279,67 @@ model Takedown {
 
   @@index([status, createdAt])
 }
+
+// ── CMS (Phase 9) ────────────────────────────────────────────────────────────────────────────
+// contentJson (Tiptap) is the source of truth; contentHtml is rendered + sanitised at save time.
+
+enum CmsStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+model CmsPage {
+  id             String        @id @default(cuid())
+  slug           String        @unique
+  title          String
+  status         CmsStatus     @default(DRAFT)
+  contentJson    Json
+  contentHtml    String
+  seoTitle       String?
+  seoDescription String?
+  ogImageId      String?
+  publishAt      DateTime?
+  publishedAt    DateTime?
+  // Optimistic-concurrency token: PATCH must send the version it read.
+  version        Int           @default(1)
+  updatedById    String
+  updatedAt      DateTime      @updatedAt
+  createdAt      DateTime      @default(now())
+  revisions      CmsRevision[]
+
+  @@index([status, publishAt])
+}
+
+model CmsRevision {
+  id          String   @id @default(cuid())
+  pageId      String
+  page        CmsPage  @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  version     Int
+  title       String
+  contentJson Json
+  authorId    String
+  createdAt   DateTime @default(now())
+
+  @@unique([pageId, version])
+}
+
+model CmsBlock {
+  key         String   @id
+  contentJson Json
+  contentHtml String
+  updatedById String
+  updatedAt   DateTime @updatedAt
+}
+
+model CmsAsset {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  mime      String
+  bytes     Int
+  width     Int?
+  height    Int?
+  alt       String
+  createdAt DateTime @default(now())
+}

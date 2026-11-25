@@ -45,6 +45,7 @@ import {
   sweepExpiredArtifacts,
   writeStorageUsage,
 } from '../features/maintenance/index.js';
+import { CMS_PUBLISH_JOB, publishDuePages, scheduleCmsPublish } from '../features/cms/index.js';
 import { MEDIA_QUEUE_NAME, type MediaJobPayload } from './queues.js';
 import { startRegionalExtractWorker } from './regional-queue.js';
 
@@ -760,6 +761,7 @@ const maintenanceWorker = runsMaintenance ? new Worker(
   MAINTENANCE_QUEUE_NAME,
   async (job) => {
     if (job.name === ARTIFACT_SWEEP_JOB) return runArtifactSweep();
+    if (job.name === CMS_PUBLISH_JOB) return void (await publishDuePages());
     // One tick per deployment; every process (API and each worker) updates its own binary.
     if (job.name === YTDLP_UPDATE_JOB) return void (await redis.publish(YTDLP_UPDATE_CHANNEL, String(Date.now())));
     logger.warn({ name: job.name }, 'Unknown maintenance job; ignoring');
@@ -771,6 +773,9 @@ maintenanceWorker?.on('failed', (job, err) =>
 );
 
 if (maintenanceQueue) {
+  void scheduleCmsPublish(maintenanceQueue).catch((err: unknown) =>
+    logger.error({ err }, 'Could not register the CMS publish schedule'),
+  );
   void scheduleMaintenance(maintenanceQueue, { ytDlpAutoUpdate: env.YTDLP_AUTO_UPDATE }).catch(
     (err: unknown) => logger.error({ err }, 'Could not register maintenance schedules'),
   );
