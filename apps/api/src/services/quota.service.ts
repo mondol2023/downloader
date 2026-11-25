@@ -3,6 +3,7 @@ import type { QuotaSnapshot, Tier } from '@media/shared';
 import { formatCount, isUnlimited, policyFor } from '@media/shared';
 import type { RequestIdentity } from '../types/express.js';
 import { keys, redis } from '../lib/redis.js';
+import { getDbHealth } from '../features/persistence/index.js';
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
@@ -81,18 +82,30 @@ async function hydrateWindow(subject: string, identity: QuotaIdentity): Promise<
   const key = keys.quotaWindow(subject);
   if ((await redis.exists(key)) === 1) return;
 
+  // Degraded mode: the ledger is unreachable, so start from an empty window
+  // rather than failing guest extraction (which only reads the snapshot).
+  if (!getDbHealth().up) return;
+
   const since = new Date(Date.now() - WINDOW_MS);
   const where =
     identity.userId != null
       ? { userId: identity.userId, createdAt: { gte: since } }
       : { guestKey: identity.guestKey, createdAt: { gte: since } };
 
-  const rows = await prisma.downloadLog.findMany({
-    where,
-    select: { id: true, jobId: true, createdAt: true },
-    orderBy: { createdAt: 'asc' },
-    take: 500,
-  });
+  let rows;
+  try {
+    rows = await prisma.downloadLog.findMany({
+      where,
+      select: { id: true, jobId: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+      take: 500,
+    });
+  } catch (err) {
+    // The DB can die between probes; an unreadable ledger must not take the
+    // quota snapshot (and therefore extraction) down with it.
+    logger.warn({ err, subject }, 'Quota window rehydrate failed; using empty window');
+    return;
+  }
 
   if (rows.length === 0) return;
 

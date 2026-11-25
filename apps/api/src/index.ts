@@ -7,8 +7,9 @@ import helmet from 'helmet';
 import pinoHttp from 'pino-http';
 import { env, isProd } from './config/env.js';
 import { logger } from './lib/logger.js';
-import { disconnectPrisma, prisma } from './lib/prisma.js';
+import { disconnectPrisma } from './lib/prisma.js';
 import { disconnectRedis, redis } from './lib/redis.js';
+import { getDbHealth, startDbHealthProbe } from './features/persistence/index.js';
 import { closeQueue } from './queue/queues.js';
 import { attachIdentity, csrfGuard } from './middleware/identity.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
@@ -148,10 +149,7 @@ app.get('/health', (_req, res) => {
 
 app.get('/health/ready', async (_req, res) => {
   const [db, cache] = await Promise.all([
-    prisma.$queryRaw`SELECT 1`.then(
-      () => true,
-      () => false,
-    ),
+    Promise.resolve(getDbHealth().up),
     redis.ping().then(
       () => true,
       () => false,
@@ -174,6 +172,9 @@ app.use('/api/v1', apiRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
+
+// Probe Postgres so routes that need it can 503 instantly during an outage.
+const stopDbProbe = startDbHealthProbe();
 
 const server = http.createServer(app);
 // Slightly above a typical 60s ALB idle timeout so the proxy, not the origin,
@@ -216,6 +217,7 @@ async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'Shutting down');
 
   clearInterval(pruneTimer);
+  stopDbProbe();
 
   const forceExit = setTimeout(() => {
     logger.error('Graceful shutdown timed out; forcing exit');

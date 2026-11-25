@@ -1,4 +1,5 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
+import { requireDatabase } from '../features/persistence/index.js';
 import authRoutes from './auth.routes.js';
 import billingRoutes from './billing.routes.js';
 import jobsRoutes from './jobs.routes.js';
@@ -16,10 +17,24 @@ import mediaRoutes from './media.routes.js';
  */
 const router = Router();
 
+/**
+ * Degraded mode: auth, billing and anything that creates or mutates a job live
+ * only in Postgres, so they 503 immediately while it is down. `/media/*` (guest
+ * extraction, Redis-cached) and the read-only job routes (artifact download,
+ * status) deliberately stay open.
+ */
+const writesNeedDatabase: RequestHandler = (req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+    next();
+    return;
+  }
+  requireDatabase(req, res, next);
+};
+
 // Path must stay `/auth` — the refresh cookie is scoped to `/api/v1/auth`.
-router.use('/auth', authRoutes);
+router.use('/auth', requireDatabase, authRoutes);
 router.use('/media', mediaRoutes);
-router.use('/jobs', jobsRoutes);
-router.use('/billing', billingRoutes);
+router.use('/jobs', writesNeedDatabase, jobsRoutes);
+router.use('/billing', requireDatabase, billingRoutes);
 
 export default router;

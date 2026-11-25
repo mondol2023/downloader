@@ -14,6 +14,7 @@ import type {
 import { evaluateFormatAccess, minimumTierFor, policyFor } from '@media/shared';
 import { env } from '../config/env.js';
 import { keys, redis } from '../lib/redis.js';
+import { getDbHealth } from '../features/persistence/index.js';
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
@@ -174,7 +175,9 @@ async function readCache(mediaId: string): Promise<ExtractionRecord | null> {
   }
 
   // Cold Redis: fall back to the Postgres mirror, which is what keeps SSR
-  // metadata pages working after a cache flush.
+  // metadata pages working after a cache flush. Skipped while Postgres is down
+  // (degraded mode) so a miss doesn't wait on a dead connection.
+  if (!getDbHealth().up) return null;
   try {
     const row = await prisma.mediaCache.findUnique({ where: { id: mediaId } });
     if (row && row.expiresAt.getTime() > Date.now()) {
@@ -203,6 +206,8 @@ async function writeCache(record: ExtractionRecord): Promise<void> {
 
   // Live streams churn every 30s; mirroring them would just thrash Postgres.
   if (record.media.isLive) return;
+  // Degraded mode: Redis already holds the record; don't queue on a dead DB.
+  if (!getDbHealth().up) return;
 
   const mirror = {
     canonicalUrl: record.media.canonicalUrl,
