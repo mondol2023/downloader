@@ -1,0 +1,56 @@
+/* Studio Console tokens. Dark is the default; [data-theme="light"] mirrors it on warm paper. */
+:root {
+  --surface-0: #0e0d0c;
+  --surface-1: #1a1917;
+  --surface-2: #252320;
+  --line: #34312c;
+  --text: #f2eee8;
+  --text-muted: #a39e95;
+  --signal: #ffb224;
+  --signal-ink: #1a1100;
+  --success: #3dd68c;
+  --danger: #ff6b5e;
+}
+[data-theme="light"] {
+  --surface-0: #f7f4ee;
+  --surface-1: #ffffff;
+  --surface-2: #ece7dd;
+  --line: #d6cfc2;
+  --text: #1b1916;
+  --text-muted: #5f594f;
+  --signal: #b36b00; /* darkened amber keeps 4.5:1 on paper */
+  --signal-ink: #ffffff;
+  --success: #12804a;
+  --danger: #c2382c;
+}
+
+@theme inline {
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-text: var(--text);
+  --color-muted: var(--text-muted);
+  --color-signal: var(--signal);
+  --color-signal-ink: var(--signal-ink);
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-fraunces);
+  --radius-key: 10px;
+  --radius-deck: 18px;
+}
+
+body {
+  background: var(--surface-0);
+  color: var(--text);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+.num { font-family: var(--font-geist-mono), monospace; font-variant-numeric: tabular-nums; }
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+/* Opacity-only: compositor-friendly, no layout or paint. */
+@keyframes shimmer { from { opacity: 0.5; } to { opacity: 0.8; } }

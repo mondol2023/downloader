@@ -30,8 +30,8 @@ You don't need any memory of earlier sessions. Do this:
 | 2 | Restriction policy + content eligibility | 🟨 | Phase 1 ✅ | policy + eligibility tests green; private/members/DRM URLs refused with typed codes; `GET /api/v1/policy/public` returns the effective limits |
 | 3 | Region-aware extraction | ⬜ | Phase 2 ✅ | region router tests green; geo-blocked result returns 451 + explanation |
 | 4 | Backend hardening | ⬜ | Phase 3 ✅ | `npm run typecheck && npm test` green; `/healthz` lists tool versions |
-| 5 | Frontend foundation + design system | ⬜ | Phase 0 ✅ (can run parallel to 1-4) | `npm run dev` starts `web` on :3000; tokens page renders |
-| 6 | Frontend features | ⬜ | Phase 5 ✅, Phase 2 ✅ | Playwright happy-path passes |
+| 5 | Frontend foundation + design system | ✅ | Phase 0 ✅ (can run parallel to 1-4) | `npm run dev` starts `web` on :3000; tokens page renders |
+| 6 | Frontend features | 🟨 | Phase 5 ✅, Phase 2 ✅ | Playwright happy-path passes — **mocked E2E green (39 pass); live `E2E_LIVE=1` happy path not run; uncommitted** |
 | 7 | Motion system | ⬜ | Phase 6 ✅ | motion checklist all ✓; reduced-motion E2E passes |
 | 8 | Admin console | ⬜ | Phase 6 ✅ | admin E2E passes: disable a platform → a normal user's extract is refused within 5 s; non-admin gets 403 everywhere under `/admin` |
 | 9 | CMS + rich-text editor | ⬜ | Phase 8 ✅ | CMS E2E passes: write a styled page → publish → `/p/<slug>` renders it; XSS fixture is stripped |
@@ -651,9 +651,9 @@ Each feature folder exposes `index.ts` only. Routes in `src/app/` compose featur
 | `history` | `/account/history` | `GET /jobs`, `/jobs/quota` | quota meter (used / limit, resets-at) |
 
 ### Task 6.x (one per feature, same shape)
-- [ ] Build the components with every state in the table, using mock data on the `/dev/<feature>` route.
-- [ ] Wire them to the real API.
-- [ ] Add a Playwright spec `e2e/<feature>.spec.ts`. The happy path for `extract`→`formats`→`jobs` uses a public, Creative-Commons test video, for example Blender's "Big Buck Bunny" on YouTube or Vimeo. Add a refusal spec for a fixture-mocked `SOURCE_PRIVATE` response (`page.route` intercept).
+- [x] Build the components with every state in the table, using mock data on the `/dev/<feature>` route.
+- [x] Wire them to the real API.
+- [x] Add a Playwright spec `e2e/<feature>.spec.ts`. The happy path for `extract`→`formats`→`jobs` uses a public, Creative-Commons test video, for example Blender's "Big Buck Bunny" on YouTube or Vimeo. Add a refusal spec for a fixture-mocked `SOURCE_PRIVATE` response (`page.route` intercept).
 - [ ] Commit per feature: `feat(web): <feature>`.
 
 Copy rules: refusals use `INELIGIBLE_COPY` verbatim. Never blame the user. Always say what they *can* do ("Try a public link" / "Upgrade to Pro for 4K").
