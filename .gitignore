@@ -12,6 +12,7 @@ storage/
 coverage/
 .DS_Store
 Thumbs.db
+/.next/
 
 /.superpowers
 downloader-515907-0e3f1b6c5d4e.json
