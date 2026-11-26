@@ -6,22 +6,13 @@ import type { NextConfig } from "next";
 // forceReload: Next has already loaded (and cached) apps/web/.env* by the time this file runs.
 loadEnvConfig(path.resolve(process.cwd(), "../.."), process.env.NODE_ENV !== "production", console, true);
 
-const API_INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://localhost:4000";
-
 const nextConfig: NextConfig = {
   // Self-contained server for the Docker image; traced from the repo root so workspace packages are included.
   output: "standalone",
   outputFileTracingRoot: path.resolve(process.cwd(), "../.."),
+  // The Express API runs inside Next route handlers; keep it and its native deps out of the bundle.
+  serverExternalPackages: ["@media/api", "argon2", "sharp", "@prisma/client", "prisma", "bullmq", "ioredis", "pino", "googleapis"],
   transpilePackages: ["@media/shared", "@media/rich-text"],
-  // Same-origin proxy so the refresh cookie (path /api/v1/auth) needs no CORS.
-  async rewrites() {
-    return [
-      {
-        source: "/api/v1/:path*",
-        destination: `${API_INTERNAL_URL}/api/v1/:path*`,
-      },
-    ];
-  },
   turbopack: {
     rules: {
       "*.css": {

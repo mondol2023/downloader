@@ -336,6 +336,28 @@ async function writeCache(record: ExtractionRecord): Promise<void> {
     .catch((err: unknown) => logger.warn({ err }, 'Extraction mirror write failed'));
 }
 
+/** Hosted extractor (no local yt-dlp). Same JSON shape, so `buildRecord` is unchanged. */
+async function fetchFromExtractorApi(pageUrl: string, signal?: AbortSignal): Promise<string> {
+  const url = new URL(env.EXTRACTOR_API_URL as string);
+  url.searchParams.set('url', pageUrl);
+  const timeout = AbortSignal.timeout(env.EXTRACTION_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      headers: {
+        accept: 'application/json',
+        ...(env.EXTRACTOR_API_KEY ? { authorization: `Bearer ${env.EXTRACTOR_API_KEY}` } : {}),
+      },
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    });
+    if (res.status === 404) throw AppError.notFound('No playable media was found at that URL');
+    if (!res.ok) throw AppError.upstream('The extractor service could not process that URL');
+    return await res.text();
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    throw AppError.upstream('The extractor service is unavailable');
+  }
+}
+
 async function runExtraction(
   source: NormalisedSource,
   signal?: AbortSignal,
@@ -370,16 +392,20 @@ async function runExtraction(
   args.push('--', source.canonical);
 
   let stdout: string;
-  try {
-    const result = await runCommand(env.YTDLP_PATH, {
-      args,
-      timeoutMs: env.EXTRACTION_TIMEOUT_MS,
-      maxOutputBytes: 48 * 1024 * 1024,
-      ...(signal ? { signal } : {}),
-    });
-    stdout = result.stdout;
-  } catch (err) {
-    throw translateExtractionError(err, source);
+  if (env.EXTRACTOR_API_URL) {
+    stdout = await fetchFromExtractorApi(source.canonical, signal);
+  } else {
+    try {
+      const result = await runCommand(env.YTDLP_PATH, {
+        args,
+        timeoutMs: env.EXTRACTION_TIMEOUT_MS,
+        maxOutputBytes: 48 * 1024 * 1024,
+        ...(signal ? { signal } : {}),
+      });
+      stdout = result.stdout;
+    } catch (err) {
+      throw translateExtractionError(err, source);
+    }
   }
 
   let payload: YtDlpPayload;

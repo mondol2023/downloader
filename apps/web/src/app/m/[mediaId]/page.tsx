@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import type { ExtractionResult } from "@media/shared";
 import { MediaScreen } from "@/features/formats";
 
-const API_INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://localhost:4000";
+const API_INTERNAL_URL = process.env.API_INTERNAL_URL ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
 /**
  * OG tags come from the API's cached record. The lookup is anonymous (no cookies), which is fine

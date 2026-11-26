@@ -2,7 +2,7 @@ import { sanitize } from "@media/rich-text";
 
 /** Server-only helpers for the public CMS. The API is reached over the internal URL, never the browser. */
 
-const API = (process.env.API_INTERNAL_URL ?? "http://localhost:4000").replace(/\/+$/, "");
+const API = (process.env.API_INTERNAL_URL ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000")).replace(/\/+$/, "");
 export const REVALIDATE_SECONDS = 300;
 
 export const pageTag = (slug: string) => `cms:${slug}`;
