@@ -79,7 +79,7 @@ router.post(
     const source = normaliseSourceUrl(url, { skipPolicy: true });
     const record = await getCachedRecordUnchecked(source.mediaId);
     const takenDown = await isTakenDown(source.mediaId);
-    const info = { host: source.host, platform: source.platform, takenDown };
+    const info = { host: source.host, platform: source.platform, url: source.canonical, takenDown };
     const media = record
       ? {
           platform: record.media.platform,
@@ -87,6 +87,8 @@ router.post(
           availability: record.media.availability,
           isLive: record.media.isLive,
           ageLimit: record.media.ageLimit,
+          title: record.media.title,
+          uploader: record.media.uploader,
           formats: record.formats,
         }
       : null;

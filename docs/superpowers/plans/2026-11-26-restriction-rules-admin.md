@@ -19,16 +19,18 @@
 - Built-in toggles that can be disabled without losing their value: `maxDuration`, `ageLimit`, `blockedHosts` (stored in `disabledBuiltins`).
 - Validation error paths are dotted, e.g. `rules.3.params.seconds`.
 - Web code: read the relevant guide under `apps/web/node_modules/next/dist/docs/` (or the hoisted `node_modules/next/dist/docs/`) before writing any web file, per `apps/web/AGENTS.md`.
-- Commits: stage only the files a task names. The working tree has unrelated uncommitted user changes (`apps/api/prisma/seed.ts`, several `apps/web/e2e/*` specs, `DownloadBar.tsx`, `dmca/page.tsx`, untracked `legal-pages.ts`, etc.); never `git add -A`, never touch those files. End commit messages with `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
+- Commits: stage only the files a task names. The working tree has unrelated uncommitted user changes (`apps/api/prisma/seed.ts`, several `apps/web/e2e/*` specs, `DownloadBar.tsx`, `dmca/page.tsx`, untracked `legal-pages.ts`, etc.); never `git add -A`, never touch those files. Name files, not directories, in `git add`. End commit messages with the `Co-Authored-By` line the executing session's harness specifies.
 - Commands: API tests `npm test -w @media/api -- <path>`; typecheck `npm run typecheck`; shared must be rebuilt after changes (`npm run build -w @media/shared`) before API/web see them.
+- `apps/api` typecheck covers `src/**` only (`apps/api/tsconfig.json`); vitest does not typecheck. A signature change does **not** surface broken test callers: grep `apps/api/test` for every changed function and fix callers by hand.
 
 ## Review Focus
 
-1. A URL pattern with many `*` against a 2048-char URL must not hang (ReDoS); patterns match case-insensitively on `host + path + query` (Task 3).
+1. A URL pattern with many `*` against a 2048-char URL must not hang (ReDoS). A `.*`-per-star regex is **not** safe: `^.*a.*a.*a.*a.*c$` against 2048 `a`s backtracks O(n⁵) on the *non-matching* case. Use a linear wildcard matcher, not `RegExp`. Patterns match case-insensitively on `host + path + query` of the canonical URL (Task 3).
 2. Metadata with `null` duration, `null` uploader, empty title, or a platform outside the 14 known ids (yt-dlp long tail) must not crash or wrongly block (Task 3, Task 5).
 3. Invalid rule lists are refused whole with a path: duplicate ids, a 201st rule, empty name, empty scope array, unknown type, unknown key (Task 2).
 4. An old snapshot or older policy version with no `rules` / `disabledBuiltins` keys loads as empty lists, and rolling back drops newer rules (Task 2).
 5. Disabling the `ageLimit` built-in falls back to the floor's 17, never to "no cap"; disabling `blockedHosts` never unblocks DRM hosts (Task 4).
+6. Every path that hands a record to a user applies the rules, including the cached lookups `GET /media/:mediaId` and `GET /media/:mediaId/subtitles/:lang` (they read `getCachedRecord` and never call `extractMedia`), so a published rule cannot be bypassed by reloading a media page (Task 5).
 
 ---
 
@@ -42,7 +44,7 @@
 | `apps/api/src/features/restrictions/policy.schema.ts` | `SoftPolicy` gains `rules`, `disabledBuiltins`; overrides schema uses `rules.schema.ts` |
 | `apps/api/src/features/restrictions/restrictions.config.ts` | defaults `rules: []`, `disabledBuiltins: []` |
 | `apps/api/src/features/restrictions/builtins.ts` (new) | `maxDurationOf`, `ageCapOf`, `extraBlockedHostsOf`: effective built-in values honoring `disabledBuiltins` |
-| `apps/api/src/features/restrictions/rules.ts` (new) | pure `evaluateRules`, `ruleHeightCap`, `globToRegExp`, `defaultRuleMessage` |
+| `apps/api/src/features/restrictions/rules.ts` (new) | pure `evaluateRules`, `ruleHeightCap`, `globMatch`, `defaultRuleMessage` |
 | `apps/api/src/features/restrictions/enforce.ts` | `assertRulesAllowSource/Media/Action`; `tierPolicyIn` applies height cap; duration guard uses `builtins.ts` |
 | `apps/api/src/features/eligibility/{blocked-hosts,eligibility}.ts` | use `builtins.ts` |
 | `apps/api/src/services/extraction.service.ts`, `routes/{jobs,media}.routes.ts`, `queue/worker.ts` | call the new guards; `extractMedia` takes `tier` |
@@ -71,9 +73,9 @@
 
 - [ ] **Step 1: Write the failing e2e test** in `apps/web/e2e/rule-refusal.spec.ts`: mock `POST /media/extract` (see `helpers.ts` `mock`/`fail`) to return `fail(403, 'SOURCE_RULE_BLOCKED', 'Shorts are not supported here.')`; paste a URL on `/`; assert `getByTestId('refusal')` has `data-code="SOURCE_RULE_BLOCKED"`, contains the title `INELIGIBLE_COPY.SOURCE_RULE_BLOCKED.title`, contains the body text `Shorts are not supported here.`, and does not contain the stock body.
 - [ ] **Step 2: Run it, expect FAIL** (`npm run e2e -w @media/web -- e2e/rule-refusal.spec.ts`; the code is unknown to the client, so no `refusal` testid).
-- [ ] **Step 3: Implement** `rules.ts` and the code/copy; rebuild shared; add `NEXT_STEP.SOURCE_RULE_BLOCKED = "Try a different link."` in `copy.ts` (the `Record<IneligibleCode,…>` forces it); in `ExtractDeck.tsx:158` render `error.message` as the body when `refusal === 'SOURCE_RULE_BLOCKED'` and `error instanceof ApiError`, otherwise `refusalCopy(refusal).body`.
+- [ ] **Step 3: Implement** `rules.ts` and the code/copy; rebuild shared; add `NEXT_STEP.SOURCE_RULE_BLOCKED = "Try a different link."` in `copy.ts` (the `Record<IneligibleCode,…>` forces it); in `ExtractDeck.tsx:158` render `error.message` as the body when `refusal === 'SOURCE_RULE_BLOCKED'` and `error instanceof ApiError`, otherwise `refusalCopy(refusal).body`. The rule's message wins over a CMS refusal override for this code (`cms/render/refusal.ts` overrides are `Partial<Record<IneligibleCode,…>>`, so no entry is needed there). The server always sends a message (the default body when the rule has none), so the client needs no fallback beyond the stock copy.
 - [ ] **Step 4: Run** the e2e test (PASS) and `npm run typecheck` (clean).
-- [ ] **Step 5: Commit** `packages/shared/src/rules.ts packages/shared/src/eligibility.ts packages/shared/src/index.ts apps/web/src/features/extract apps/web/e2e/rule-refusal.spec.ts` — `feat(shared): rule types, catalogue and SOURCE_RULE_BLOCKED`.
+- [ ] **Step 5: Commit** `packages/shared/src/rules.ts packages/shared/src/eligibility.ts packages/shared/src/index.ts apps/web/src/features/extract/copy.ts apps/web/src/features/extract/components/ExtractDeck.tsx apps/web/e2e/rule-refusal.spec.ts` — `feat(shared): rule types, catalogue and SOURCE_RULE_BLOCKED`.
 
 ---
 
@@ -93,9 +95,9 @@
   - `{}` overrides → `p.rules` equals `[]` and `p.disabledBuiltins` equals `[]`;
   - 201 rules → 422 `POLICY_INVALID`; duplicate ids → 422 with a detail path starting `rules`; empty `name` → path `rules.0.name`; `max_duration` with `seconds: 0` → path `rules.0.params.seconds`; `tiers: []` → path `rules.0.params.tiers`; unknown type → 422; unknown key on a rule → 422 `unknown key`; `age_limit.max: 18` → 422; `block_url_pattern` with 6 `*` or 201 chars → 422; `tier_only` with neither `platforms` nor `hosts` → 422; `disabledBuiltins: ['bogus']` → 422;
   - rules replace rather than merge (publishing `[]` over a policy that had rules yields `[]`).
-  - `store.test.ts`: a snapshot/stored overrides object without the new keys boots to empty lists (read `policy.store.ts` snapshot loading first; if the snapshot stores an `EffectivePolicy` directly, default the missing keys on read).
+  - `store.test.ts`: a snapshot file `{ version: 3, overrides: { global: { maxDurationSec: 600 } } }` (no new keys) boots to `rules: []`, `disabledBuiltins: []`. The snapshot stores *overrides* and every load path goes through `mergePolicy(DEFAULT_POLICY, …)` (`policy.store.ts:121-123, 157, 170`), so the defaults fill the keys; no read-side migration is needed. This test pins that.
 - [ ] **Step 2: Run, expect FAIL** (`npm test -w @media/api -- test/features/restrictions`).
-- [ ] **Step 3: Implement.** `rulesSchema`: `z.array(ruleUnion).max(RULES_MAX)` with `.superRefine` for unique ids (issue path `[index,'id']`); `ruleUnion` is `z.discriminatedUnion('type', [...])`, each member `.strict()`, params `.strict()`; URL pattern matches `/^[^\s]{1,200}$/` plus a `*`-count refine; scope arrays `.min(1)`. Add the two keys to `PolicyOverridesSchema` and `SoftPolicy`. Type check the schema against `Rule` with `satisfies z.ZodType<Rule>`-style assertion.
+- [ ] **Step 3: Implement.** `rulesSchema`: `z.array(ruleUnion).max(RULES_MAX)` with `.superRefine` for unique ids (issue path `[index,'id']`); `ruleUnion` is `z.discriminatedUnion('type', [...])`, each member `.strict()`, params `.strict()`; URL pattern matches `/^[^\s]{1,200}$/` plus a `*`-count refine; scope arrays `.min(1)`. Add the two keys to `PolicyOverridesSchema` and `SoftPolicy`. `deepMerge` in `merge.ts` already replaces arrays wholesale and `DeepPartial<T[]>` is `T[]`, so neither needs changing. `PolicyOverridesSchema` is cast through `unknown`, which hides schema/type drift: add a compile-time check `type _Check = z.infer<typeof rulesSchema> extends Rule[] ? true : never` (and the reverse) in `rules.schema.ts`.
 - [ ] **Step 4: Run** the restrictions tests (PASS) and typecheck.
 - [ ] **Step 5: Commit** — `feat(api): rules and disabledBuiltins in the policy schema`.
 
@@ -116,16 +118,16 @@
   - `interface RuleHit { rule: Rule; message: string }`
   - `evaluateRules(policy: Pick<EffectivePolicy,'rules'>, ctx: RuleContext): RuleHit | null` — first enabled matching rule in list order
   - `ruleHeightCap(policy: Pick<EffectivePolicy,'rules'>, tier: Tier, platform?: string): number` — smallest `max_height.height` among enabled matching rules, `Infinity` if none
-  - `defaultRuleMessage(rule: Rule): string`; `globToRegExp(pattern: string): RegExp`
+  - `defaultRuleMessage(rule: Rule): string`; `globMatch(pattern: string, subject: string): boolean` (whole-string, case-insensitive, `*` = any run of characters, every other character literal)
 - Consumes: `Rule`, `Tier`, `INELIGIBLE_COPY` from shared; `isBlockedHost`-style label-boundary host matching (write a local `hostMatches(host, base)`; do not import eligibility to keep this pure).
 
-Matching rules (one line each): `block_host` label-boundary match of any host; `block_platform` hits at `source` for action `extract`, at `action` for `download`/`playback`; `block_url_pattern` compares `globToRegExp(pattern)` (anchored, case-insensitive) with `host + pathname + search` derived from `ctx.url`; `block_keyword` case-insensitive substring over `title` and/or `uploader` per `fields`; `max_duration` hits at `metadata` when `durationSeconds != null && > seconds` and tier/platform scope matches; `age_limit` hits at `metadata` when `ageLimit > max`; `tier_only` hits at `source` and `action` when tier rank (index in `TIERS`) < rank of `minTier` and platform ∈ `platforms` or host matches `hosts`; `max_height` only feeds `ruleHeightCap`. Empty/undefined scope = applies to all. Disabled rules are skipped. Compiled matchers are cached in a `WeakMap<Rule[], …>` keyed by `policy.rules`.
+Matching rules (one line each): `block_host` label-boundary match of any host; `block_platform` hits at `source` for action `extract`, at `action` for `download`/`playback`; `block_url_pattern` runs `globMatch(pattern, host + pathname + search)` derived from `ctx.url` (the user's canonical URL from `normaliseSourceUrl`, which keeps the path and drops the trailing slash; not `media.canonicalUrl`, which is yt-dlp's `webpage_url` and turns a Shorts link into `watch?v=`); `block_keyword` case-insensitive substring over `title` and/or `uploader` per `fields`; `max_duration` hits at `metadata` when `durationSeconds != null && > seconds` and tier/platform scope matches; `age_limit` hits at `metadata` when `ageLimit > max`; `tier_only` hits at `source` and `action` when tier rank (index in `TIERS`) < rank of `minTier` and platform ∈ `platforms` or host matches `hosts`; `max_height` only feeds `ruleHeightCap`. Empty/undefined scope = applies to all. Disabled rules are skipped. No matcher cache: at ≤ 200 rules and a linear matcher, evaluating per request is cheap.
 
 Default messages: `max_duration` → `` `Longer than the ${Math.floor(seconds/60)}-minute limit.` ``; `tier_only` → `` `This is available on the ${minTier} plan and above.` ``; others → `INELIGIBLE_COPY.SOURCE_RULE_BLOCKED.body`. A rule's own `message` wins.
 
-- [ ] **Step 1: Write failing tests** (`rules.test.ts`): one hit and one miss per rule type per stage; list order decides the first hit; disabled rule skipped; own `message` returned, else the default above; `globToRegExp('*/shorts/*')` matches `youtube.com/shorts/abc` and not `youtube.com/watch?v=1`; matching is case-insensitive; **ReDoS**: pattern `*a*a*a*a*` against a 2048-char `a…ab` URL returns in under 50 ms; `durationSeconds: null` never hits `max_duration`; `uploader: null` with `fields: ['channel']` is a miss, not a throw; unknown platform string (`'somesite'`) with a platform-scoped rule is a miss; `tier_only` GUEST < FREE < PRO ordering with `minTier: 'FREE'`; `ruleHeightCap` returns the minimum of matching rules and `Infinity` with none, honoring tier and platform scope.
+- [ ] **Step 1: Write failing tests** (`rules.test.ts`): one hit and one miss per rule type per stage; list order decides the first hit; disabled rule skipped; own `message` returned, else the default above; `globMatch('*/shorts/*', 'youtube.com/shorts/abc')` is true and `globMatch('*/shorts/*', 'youtube.com/watch?v=1')` false; `globMatch('a.b', 'axb')` is false (`.` is literal); matching is case-insensitive; **ReDoS**: `globMatch('*a*a*a*a*c', 'a'.repeat(2048))` returns `false` in under 50 ms (the non-matching case is the one that backtracks); `durationSeconds: null` never hits `max_duration`; `uploader: null` with `fields: ['channel']` is a miss, not a throw; unknown platform string (`'somesite'`) with a platform-scoped rule is a miss; `tier_only` GUEST < FREE < PRO ordering with `minTier: 'FREE'`; `ruleHeightCap` returns the minimum of matching rules and `Infinity` with none, honoring tier and platform scope.
 - [ ] **Step 2: Run, expect FAIL** (module not found).
-- [ ] **Step 3: Implement** `rules.ts` as specified. `globToRegExp`: escape every regex metacharacter, then replace `\*` with `.*`; anchor with `^…$`, flag `i`.
+- [ ] **Step 3: Implement** `rules.ts` as specified. `globMatch`: lowercase both strings, then the standard two-pointer wildcard match (on a mismatch, backtrack only to the last `*` and advance its anchor by one). That is O(pattern × subject) worst case with no recursion; do not build a `RegExp`.
 - [ ] **Step 4: Run** `npm test -w @media/api -- test/features/restrictions/rules.test.ts` (PASS).
 - [ ] **Step 5: Commit** — `feat(api): pure restriction rule engine`.
 
@@ -154,7 +156,7 @@ Default messages: `max_duration` → `` `Longer than the ${Math.floor(seconds/60
 
 **Files:**
 - Modify: `enforce.ts`, `restrictions/index.ts`, `services/extraction.service.ts`, `routes/jobs.routes.ts`, `routes/media.routes.ts`, `queue/worker.ts`
-- Test: `apps/api/test/features/restrictions/rules.enforce.test.ts` (new); one case added to `apps/api/test/features/eligibility/worker-recheck.test.ts` following its existing pattern
+- Test: `apps/api/test/features/restrictions/rules.enforce.test.ts` (new); one case added to `apps/api/test/features/eligibility/worker-recheck.test.ts` following its existing pattern; existing calls updated in `apps/api/test/features/eligibility/extraction-eligibility.test.ts`
 
 **Interfaces:**
 - Produces (in `enforce.ts`, all read `getPolicy()` and throw `new AppError(403, 'SOURCE_RULE_BLOCKED', hit.message)`):
@@ -162,13 +164,21 @@ Default messages: `max_duration` → `` `Longer than the ${Math.floor(seconds/60
   - `assertRulesAllowMedia(media: Pick<MediaMetadata,'platform'|'durationSeconds'|'ageLimit'|'title'|'uploader'>, tier: Tier): void`
   - `assertRulesAllowAction(input: { action: 'download'|'playback'; platform: string; canonicalUrl: string }, tier: Tier): void` (host derived with `new URL(canonicalUrl).hostname`)
   - `tierPolicyIn` returns `maxHeight = min(tier cap, platform cap, ruleHeightCap(policy, tier, platform))`, which flows into `evaluateAccessIn`, `gateRecord`, `assertFormatAllowed`, the worker's `tierPolicyFor` and the preview with no further changes.
-  - `extractMedia(rawUrl, options: { signal?; force?; userRegion?; tier: Tier })` — `tier` is required so a missed caller fails to compile.
-- Call sites: source stage in `resolveRecord` right after `assertNotTakenDown` (outside the cached-refusal path, so rule changes apply immediately and are never cached as refusals); metadata stage in `extractMedia` right after `assertDurationAllowed`; action stage in `jobs.routes.ts` after `assertPlatformAllowed(platform, 'download')`, in `media.routes.ts` after `assertPlatformAllowed(…, 'playback')`, and in the worker's `recheckPolicy` (add a `tier` parameter; its caller has `payload.tier`) so a rule published while a job is queued still applies. Pass `tier` at the four `extractMedia` calls (`jobs.routes.ts:73`, `media.routes.ts:47` and `:107`, `worker.ts:368`).
+  - `assertRulesAllowRecord(record: ExtractionRecord, tier: Tier): void`: source stage on `normaliseSourceUrl(record.media.sourceUrl, { skipPolicy: true })`, then the metadata stage. Used by the cached-lookup routes.
+  - `extractMedia(rawUrl, options: { signal?; force?; userRegion?; tier: Tier })`: the options object becomes required and `tier` is required in it, so a missed `src` caller fails to compile. `resolveRecord` takes the same options type.
+- Call sites:
+  - Source stage in `resolveRecord` right after `assertNotTakenDown` and before `readRefusal`/`readCache`, so rule changes apply to cached records at once and a rule refusal is never written to the refusal cache.
+  - Metadata stage in `extractMedia` right after `assertDurationAllowed`. This also covers the regional path: `extractMediaDirect` (regional worker, `worker.ts:840`) has no tier and gets **no** rule checks; its result goes back to the API, which still runs `extractMedia`'s checks on it.
+  - Action stage in `jobs.routes.ts` after `assertPlatformAllowed(platform, 'download')` (line 78), and in `media.routes.ts` after `assertPlatformAllowed(…, 'playback')` (line 109).
+  - Worker: `recheckPolicy(sourceUrl, tier)` (line 351, called at 213) calls `assertRulesAllowSource(source, tier)` and `assertRulesAllowAction({action:'download', …}, tier)` after its `assertPlatformAllowed`, so a rule published while a job is queued still applies. `extractMediaOrRefuse(sourceUrl, signal, tier)` (line 366, called at 224) passes `tier` to `extractMedia`. Both get `payload.tier`. A rule refusal is a 403, so the existing `UnrecoverableJobError` mapping already covers it.
+  - Cached lookups: `assertRulesAllowRecord(record, req.identity.tier)` in `GET /:mediaId` (`media.routes.ts:80`) and `GET /:mediaId/subtitles/:lang` (`:147`), right after the not-found check.
+  - Pass `tier` at the four `extractMedia` calls (`jobs.routes.ts:73`, `media.routes.ts:47` and `:107`, `worker.ts:368`).
+  - Tests: `test/features/eligibility/extraction-eligibility.test.ts:142-172` calls `extractMedia` without options. Typecheck will not catch this (see Global Constraints), so update those calls by hand to pass `{ tier: 'GUEST' }` (merged with any existing `force`).
 
-- [ ] **Step 1: Write failing tests** (`rules.enforce.test.ts`, policy set via `setCurrentPolicy(mergePolicy(DEFAULT_POLICY, {rules:[…]}, 1))`): each assert throws code `SOURCE_RULE_BLOCKED` with status 403 and the rule's message for a matching rule and passes for a non-matching or disabled one; `tierPolicyFor('FREE','youtube').maxHeight` is lowered by an enabled `max_height` rule scoped to FREE+youtube and unchanged for PRO and for `tiktok`; the unknown-platform case (`'somesite'`) passes; worker-recheck case: a queued `download` job for a platform blocked on `download` fails with `UnrecoverableJobError` text containing `SOURCE_RULE_BLOCKED` and releases the reservation, like the existing platform-disabled case.
+- [ ] **Step 1: Write failing tests** (`rules.enforce.test.ts`, policy set via `setCurrentPolicy(mergePolicy(DEFAULT_POLICY, {rules:[…]}, 1))`): each assert throws code `SOURCE_RULE_BLOCKED` with status 403 and the rule's message for a matching rule and passes for a non-matching or disabled one; `tierPolicyFor('FREE','youtube').maxHeight` is lowered by an enabled `max_height` rule scoped to FREE+youtube and unchanged for PRO and for `tiktok`; the unknown-platform case (`'somesite'`) passes; `assertRulesAllowRecord` refuses a cached record whose `sourceUrl` matches a `block_url_pattern` rule and whose title matches a `block_keyword` rule (route-level: `GET /media/:mediaId` on a cached record returns 403 `SOURCE_RULE_BLOCKED` once such a rule is set); a source-stage rule refusal leaves no refusal-cache entry (after disabling the rule, the same URL resolves); worker-recheck case: a queued `download` job for a platform blocked on `download` fails with `UnrecoverableJobError` text containing `SOURCE_RULE_BLOCKED` and releases the reservation, like the existing platform-disabled case.
 - [ ] **Step 2: Run, expect FAIL.**
 - [ ] **Step 3: Implement** the guards and wire the call sites; export the guards from `index.ts`.
-- [ ] **Step 4: Run** `npm test -w @media/api` (full suite PASS) and `npm run typecheck` (the required `tier` surfaces any missed caller, including tests that call `extractMedia`; fix those by passing `'GUEST'`).
+- [ ] **Step 4: Run** `npm run typecheck` (the required `tier` surfaces any missed `src` caller), then `grep -rn "extractMedia(\|recheckPolicy(" apps/api/test` and confirm every hit passes a tier, then `npm test -w @media/api` (full suite PASS).
 - [ ] **Step 5: Commit** — `feat(api): enforce restriction rules at lookup, metadata, download and playback`.
 
 ---

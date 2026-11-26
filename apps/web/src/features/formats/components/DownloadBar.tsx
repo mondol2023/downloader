@@ -1,6 +1,8 @@
 "use client";
 import Link from "next/link";
+import { useState } from "react";
 import { Button } from "@/components/ui";
+import { useRightsAck } from "../hooks/useRightsAck";
 import { ApiError } from "@/lib/api";
 import { formatDateTime, tierLabel } from "@/lib/format";
 
@@ -41,6 +43,13 @@ export function DownloadBar({
   onDownload: () => void;
 }) {
   const fail = error ? failureCopy(error) : null;
+  const { acked, remember } = useRightsAck();
+  const [confirmed, setConfirmed] = useState(false);
+  const needsConfirm = acked === false;
+  const download = () => {
+    if (needsConfirm) remember();
+    onDownload();
+  };
   return (
     <div className="space-y-3 rounded-deck border border-line bg-surface-1 p-4" data-testid="download-bar">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -54,10 +63,26 @@ export function DownloadBar({
             "Choose a format to continue."
           )}
         </p>
-        <Button onClick={onDownload} disabled={disabled || pending || !label}>
+        <Button onClick={download} disabled={disabled || pending || !label || acked === null || (needsConfirm && !confirmed)}>
           {pending ? "Starting…" : "Download"}
         </Button>
       </div>
+      {needsConfirm && (
+        <label className="flex items-start gap-2 text-sm text-muted">
+          <input
+            type="checkbox"
+            className="mt-0.5 size-4 accent-[var(--color-accent,currentColor)]"
+            checked={confirmed}
+            onChange={(e) => setConfirmed(e.target.checked)}
+          />
+          <span>
+            I own this content or have the right to download it.{" "}
+            <Link href="/terms" className="underline">
+              Terms
+            </Link>
+          </span>
+        </label>
+      )}
       {queued && !fail && (
         <p role="status" className="text-sm text-success">
           Added to your downloads. You can keep browsing while it finishes.{" "}

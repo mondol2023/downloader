@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { INELIGIBLE_COPY } from "@media/shared";
 import { mockExtract } from "../src/mocks/media";
-import { alert, fail, mock, ok, stubSession } from "./helpers";
+import { alert, confirmRights, fail, mock, ok, stubSession } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await stubSession(page);
@@ -66,6 +66,7 @@ test("live: Big Buck Bunny extract → formats → job", async ({ page }) => {
   await page.getByRole("button", { name: "Get formats" }).click();
   await expect(page).toHaveURL(/\/m\//, { timeout: 90_000 });
   await page.getByTestId("format-picker").getByRole("radio").first().click();
+  await confirmRights(page);
   await page.getByRole("button", { name: "Download" }).click();
   await expect(page.getByTestId("job-tray")).toBeVisible();
   await expect(page.getByRole("link", { name: "Download file" })).toBeVisible({ timeout: 150_000 });

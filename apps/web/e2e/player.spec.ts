@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { MOCK_GRANT, mockExtract } from "../src/mocks/media";
-import { alert, fail, mock, ok, stubSession } from "./helpers";
+import { alert, confirmRights, fail, mock, ok, stubSession } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await stubSession(page);
@@ -38,6 +38,7 @@ test("playback not on the plan shows an upsell and leaves downloading available"
   await page.getByRole("button", { name: /^Play / }).click();
   await expect(page.getByTestId("player")).toHaveAttribute("data-phase", "error");
   await expect(alert(page)).toContainText("In-app playback isn't on your plan");
+  await confirmRights(page);
   await expect(page.getByRole("button", { name: "Download" })).toBeEnabled();
 });
 

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { mockExtract, mockJob } from "../src/mocks/media";
-import { alert, fail, mock, ok, stubSession } from "./helpers";
+import { alert, confirmRights, fail, mock, ok, stubSession } from "./helpers";
 
 test.beforeEach(async ({ page }) => {
   await stubSession(page);
@@ -41,6 +41,7 @@ test("audio-only picks offer a conversion choice, and Download enqueues the chos
 
   await page.getByTestId("format-picker").locator('[data-format-id="140"]').click();
   await expect(page.getByLabel("Audio format")).toBeVisible();
+  await confirmRights(page);
   await page.getByRole("button", { name: "Download" }).click();
 
   await expect(page.getByRole("status").filter({ hasText: "Added to your downloads" })).toBeVisible();
@@ -52,6 +53,7 @@ test("a quota refusal explains what to do next", async ({ page }) => {
   await mock(page, "GET", "/media/mock-media", ok(mockExtract()));
   await mock(page, "POST", "/jobs", fail(429, "TOO_MANY_REQUESTS", "limit", { retryAfterSeconds: 60 }));
   await page.goto("/m/mock-media");
+  await confirmRights(page);
   await page.getByRole("button", { name: "Download" }).click();
   await expect(alert(page)).toContainText("used all of today's downloads");
   await expect(alert(page).getByRole("link", { name: "See plans" })).toBeVisible();
@@ -70,4 +72,20 @@ test("a signed-in Pro viewer sees no locked formats", async ({ page }) => {
   await expect(page.getByTestId("format-picker")).toBeVisible();
   await expect(page.locator("[data-locked]")).toHaveCount(0);
   await expect(page.getByTestId("locked-banner")).toHaveCount(0);
+});
+
+test("the rights statement is asked once, then remembered", async ({ page }) => {
+  await mock(page, "GET", "/media/mock-media", ok(mockExtract()));
+  await mock(page, "POST", "/jobs", ok(mockJob("queued", { id: "job-1" }), 202));
+  await mock(page, "GET", "/jobs/job-1", ok(mockJob("downloading", { id: "job-1" })));
+  await page.goto("/m/mock-media");
+
+  await expect(page.getByRole("button", { name: "Download" })).toBeDisabled();
+  await confirmRights(page);
+  await page.getByRole("button", { name: "Download" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Added to your downloads" })).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByLabel(/I own this content/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Download" })).toBeEnabled();
 });

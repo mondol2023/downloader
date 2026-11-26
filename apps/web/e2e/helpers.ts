@@ -30,5 +30,10 @@ export async function stubSession(page: Page, me: MeResponse = MOCK_GUEST_ME) {
   await mock(page, "GET", "/jobs", ok([]));
 }
 
+/** First download on a device asks people to confirm they have the rights; tick it once. */
+export async function confirmRights(page: Page) {
+  await page.getByLabel(/I own this content or have the right to download it/).check();
+}
+
 /** App alerts only: Next's route announcer is also role=alert. */
 export const alert = (page: Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');

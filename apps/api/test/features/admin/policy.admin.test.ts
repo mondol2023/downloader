@@ -115,6 +115,22 @@ describe('POST /policy', () => {
     expect(db.audit).toHaveLength(0);
   });
 
+  it('a bad rule → 422 with a dotted path to the field', async () => {
+    const bad = { id: 'r1', name: 'Long', type: 'max_duration', enabled: true, params: { seconds: 0 } };
+    const res = await call(router, 'POST', '/', { overrides: { rules: [bad] }, note: 'bad rule' });
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe('POLICY_INVALID');
+    expect(res.body.error.details[0].path).toBe('rules.0.params.seconds');
+  });
+
+  it('published rules round-trip through GET /', async () => {
+    const good = { id: 'r1', name: 'No shorts', type: 'block_url_pattern', enabled: true, params: { pattern: '*/shorts/*' } };
+    await call(router, 'POST', '/', { overrides: { rules: [good], disabledBuiltins: ['ageLimit'] }, note: 'rules' });
+    const res = await call(router, 'GET', '/');
+    expect(res.body.data.active.rules).toEqual([good]);
+    expect(res.body.data.active.disabledBuiltins).toEqual(['ageLimit']);
+  });
+
   it('a missing note → 422', async () => {
     const res = await call(router, 'POST', '/', { overrides: {} });
     expect(res.status).toBe(422);
@@ -129,6 +145,16 @@ describe('POST /policy/:version/activate', () => {
     expect(res.status).toBe(200);
     expect(db.activated).toEqual([3]);
     expect(db.audit[0]).toMatchObject({ action: 'policy.activate', target: 'policy:3', after: { version: 3 } });
+  });
+
+  it('rolling back to a version without rules empties active.rules', async () => {
+    const good = { id: 'r1', name: 'No shorts', type: 'block_url_pattern', enabled: true, params: { pattern: '*/shorts/*' } };
+    await call(router, 'POST', '/', { overrides: { rules: [good] }, note: 'rules' });
+    db.versions.push({ version: 9, note: 'old', createdById: null, createdAt: new Date(), active: false });
+    await call(router, 'POST', '/9/activate');
+    // the mocked store applies the old (rule-less) version; the real store does the same via mergePolicy
+    expect(db.activated).toEqual([9]);
+    expect(mergePolicy(DEFAULT_POLICY, {}, 9).rules).toEqual([]);
   });
 
   it('unknown version → 404; non-numeric → 422', async () => {
@@ -185,6 +211,21 @@ describe('POST /policy/preview', () => {
     const res = await call(router, 'POST', '/preview', { overrides: {}, url, tier: 'FREE' });
     expect(res.body.data.active.refusal.code).toBe('SOURCE_TAKEN_DOWN');
     expect(res.body.data.draft.refusal.code).toBe('SOURCE_TAKEN_DOWN');
+  });
+
+  it('previews draft rules: refuses in the draft only and names the rule', async () => {
+    const overrides = {
+      rules: [{ id: 'r1', name: 'No shorts', type: 'block_url_pattern', enabled: true, params: { pattern: '*/shorts/*' } }],
+    };
+    const res = await call(router, 'POST', '/preview', {
+      overrides,
+      url: 'https://www.youtube.com/shorts/abc',
+      tier: 'FREE',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.data.active.allowed).toBe(true);
+    expect(res.body.data.draft.refusal.code).toBe('SOURCE_RULE_BLOCKED');
+    expect(res.body.data.draft.rule).toEqual({ id: 'r1', name: 'No shorts' });
   });
 
   it('is a read: no audit row, and an invalid draft → 422', async () => {

@@ -1,5 +1,6 @@
 import { PrismaClient, Role, Tier } from '@prisma/client';
 import { hashPassword } from '../src/services/user.service.js';
+import { seedLegalPages } from './legal-pages.js';
 
 const prisma = new PrismaClient();
 
@@ -25,7 +26,9 @@ async function main(): Promise<void> {
       res.count ? `Promoted ${adminEmail} to ADMIN` : `ADMIN_EMAIL ${adminEmail} has no account yet; sign up, then re-seed`,
     );
   }
-  console.log(`Seeded ${SEED_USERS.length} users`);
+  const author = await prisma.user.findFirst({ where: { role: Role.ADMIN } }) ?? (await prisma.user.findFirstOrThrow());
+  const pages = await seedLegalPages(prisma, author.id);
+  console.log(`Seeded ${SEED_USERS.length} users, ${pages} legal pages`);
 }
 
 main()
