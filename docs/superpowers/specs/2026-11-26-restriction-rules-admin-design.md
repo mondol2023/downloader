@@ -74,26 +74,30 @@ Common optional scope on limit-style rules: `tiers?: Tier[]`, `platforms?: Platf
 | `max_duration` | `seconds` (int > 0), scope | metadata |
 | `max_height` | `height` (int > 0), scope | format |
 | `age_limit` | `max` (int 0..17) | metadata |
-| `tier_only` | `minTier`, and `platforms[]` or `hosts[]` (at least one) | lookup, download, format |
+| `tier_only` | `minTier`, and `platforms[]` or `hosts[]` (at least one) | lookup, download (not per format) |
 
 ### Built-in rules
 
-Fixed ids, stored in the existing fields (no data migration):
+The existing settings stay in their existing fields (no data migration). The screen shows them as
+built-in rows. Rows whose switch is already one of those fields map onto it:
 
-| built-in id | backing field | "disabled" means |
+| built-in row | backing field | switch on means |
 |---|---|---|
-| `builtin:maintenance` | `global.maintenanceMode` + message | off (no maintenance) |
-| `builtin:extraction` | `global.extractionEnabled` | extraction stays on |
-| `builtin:downloads` | `global.downloadsEnabled` | downloads stay on |
-| `builtin:live-vod` | `global.allowLiveVod` | finished live streams allowed |
-| `builtin:max-duration` | `global.maxDurationSec` | no cap |
-| `builtin:age-limit` | `global.ageLimitMax` | cap falls back to the floor's 17 |
-| `builtin:blocked-hosts` | `global.extraBlockedHosts` | list ignored |
-| `builtin:platform:<id>` | `platforms.<id>` | platform fully allowed |
-| `builtin:tier:<tier>` | `tiers.<tier>` | n/a, tier limits are edited, not disabled |
+| Maintenance mode | `global.maintenanceMode` (+ message) | maintenance active |
+| Pause link lookup | `global.extractionEnabled` (inverted) | extraction paused |
+| Pause downloads | `global.downloadsEnabled` (inverted) | downloads paused |
+| Block finished live streams | `global.allowLiveVod` (inverted) | VOD refused |
+| Max duration | `global.maxDurationSec` | cap applied |
+| Age limit | `global.ageLimitMax` | cap applied (off = the floor's 17) |
+| Extra blocked hosts | `global.extraBlockedHosts` | list applied |
 
-Schema change: `global.maxDurationSec` becomes nullable (`null` = no cap). Tier limits stay
-edit-only; they are surfaced as built-in rows that link to the Tiers tab.
+Max duration, age limit and extra blocked hosts have no "off" value that keeps the admin's number or
+list, so a new top-level `disabledBuiltins: ('maxDuration' | 'ageLimit' | 'blockedHosts')[]` records
+which are switched off while the values are preserved. Disabling max duration means no cap; disabling
+the age limit falls back to the floor's 17; disabling blocked hosts ignores only the admin's extra
+hosts (the floor's DRM hosts always apply). This replaces the earlier idea of making
+`maxDurationSec` nullable. Per-site and per-plan settings stay on the Sites and Tiers tabs; the list
+shows one link row to each instead of one row per platform or tier.
 
 ## 4. Enforcement
 
@@ -121,9 +125,10 @@ has not been read yet; the plan must confirm this re-check exists or add it.
 
 Endpoints unchanged: `GET /`, `POST /` (publish), `POST /preview`, `POST /:version/activate`.
 
-- `GET /` additionally returns `ruleTypes` (label, parameter field descriptors, stock copy) and the
-  floor as rule-shaped data for the locked rows.
-- Validation errors return 422 `POLICY_INVALID` with a path (e.g. `rules[3].params.seconds`).
+- The rule type catalogue (label, parameter field descriptors) lives in `@media/shared` and the web
+  form is generated from it, so `GET /` does not change. The locked rows are built from the
+  `hardFloor` data `GET /` already returns.
+- Validation errors return 422 `POLICY_INVALID` with a dotted path (e.g. `rules.3.params.seconds`).
 - `Verdict` gains `rule: { id, name } | null`; locked-format counts include rule locks.
 - Audit is unchanged (`policy.publish` records overrides + note).
 
@@ -156,7 +161,11 @@ Web code must follow `apps/web/AGENTS.md` (read `node_modules/next/dist/docs/` b
 
 ## 8. Open items for the plan
 
-1. Confirm the worker re-checks policy at download start (see §4).
+Resolved while writing the plan:
+1. The worker already re-checks policy at job start (`recheckPolicy` in `queue/worker.ts`); the
+   plan adds the action-stage rule check there.
 2. Custom rule ids are UUIDs generated client-side when the rule is added; the server only checks
-   format and uniqueness. Built-in ids are the fixed `builtin:*` strings above.
-3. Confirm the `block_keyword` metadata fields (`title`, `channel`) are available in the cached record.
+   format and uniqueness.
+3. `block_keyword`'s `channel` field maps to the cached record's `media.uploader`; `title` to `media.title`.
+4. Rule checks run outside the cached-refusal path, so a rule change applies immediately and a rule
+   refusal is never cached.
