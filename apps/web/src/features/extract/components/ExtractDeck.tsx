@@ -155,7 +155,11 @@ export function ExtractDeckView({
       {refusal && (
         <div role="alert" data-testid="refusal" data-code={refusal} className="rounded-deck border border-danger/40 bg-danger/10 p-5">
           <h2 className="font-display text-xl">{refusalCopy(refusal).title}</h2>
-          <p className="mt-1 text-sm text-muted">{refusalCopy(refusal).body}</p>
+          <p className="mt-1 text-sm text-muted">
+            {refusal === "SOURCE_RULE_BLOCKED" && error instanceof ApiError && error.message
+              ? error.message
+              : refusalCopy(refusal).body}
+          </p>
           <p className="mt-3 text-sm">{NEXT_STEP[refusal]}</p>
         </div>
       )}

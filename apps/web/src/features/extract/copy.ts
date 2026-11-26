@@ -15,6 +15,7 @@ export const NEXT_STEP: Record<IneligibleCode, string> = {
   SOURCE_GEOBLOCKED: "Try a link that's open worldwide.",
   SOURCE_PLATFORM_DISABLED: "Try again in a little while, or paste a link from another site.",
   SOURCE_TAKEN_DOWN: "Try a link to a different video.",
+  SOURCE_RULE_BLOCKED: "Try a different link.",
 };
 
 /** Syntactic check only; the server is the authority on whether the source is downloadable. */

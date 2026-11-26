@@ -10,6 +10,7 @@ export const INELIGIBLE_CODES = [
   'SOURCE_GEOBLOCKED',
   'SOURCE_PLATFORM_DISABLED',
   'SOURCE_TAKEN_DOWN',
+  'SOURCE_RULE_BLOCKED',
 ] as const;
 
 export type IneligibleCode = (typeof INELIGIBLE_CODES)[number];
@@ -54,5 +55,9 @@ export const INELIGIBLE_COPY: Record<IneligibleCode, { title: string; body: stri
   SOURCE_TAKEN_DOWN: {
     title: 'This media is no longer available',
     body: "It was removed following a takedown request, so we can't download it.",
+  },
+  SOURCE_RULE_BLOCKED: {
+    title: "This link isn't available",
+    body: "This content is restricted by this service's rules.",
   },
 };
