@@ -25,7 +25,7 @@ function Bar() {
   );
 }
 
-function Body({ title, children }: { title: string; children: ReactNode }) {
+function Body({ title, children, showFloor }: { title: string; children: ReactNode; showFloor: boolean }) {
   const { data } = usePolicyDraft();
   const [tab, setTab] = useState<"edit" | "history">("edit");
   return (
@@ -34,7 +34,7 @@ function Body({ title, children }: { title: string; children: ReactNode }) {
         <h1 className="font-display text-3xl">{title}</h1>
         <Badge tone="neutral">policy v{data.active.version}</Badge>
       </div>
-      <HardFloor floor={data.hardFloor} />
+      {showFloor && <HardFloor floor={data.hardFloor} />}
       <div role="tablist" aria-label="Policy" className="flex gap-1 border-b border-line">
         {(["edit", "history"] as const).map((t) => (
           <button
@@ -63,17 +63,17 @@ function Body({ title, children }: { title: string; children: ReactNode }) {
 }
 
 /** Loads the policy, owns the shared draft, and frames one editor with the hard floor, History and the review bar. */
-export function PolicyScreen({ title, children }: { title: string; children: ReactNode }) {
+export function PolicyScreen({ title, children, showFloor = true }: { title: string; children: ReactNode; showFloor?: boolean }) {
   const q = usePolicyAdmin();
   if (q.isPending) return <Skeleton className="h-64" />;
   if (q.isError) return <p role="alert" className="text-sm text-danger">Couldn&apos;t load the policy.</p>;
-  return <PolicyView data={q.data} title={title}>{children}</PolicyView>;
+  return <PolicyView data={q.data} title={title} showFloor={showFloor}>{children}</PolicyView>;
 }
 
-export function PolicyView({ data, title, children }: { data: PolicyAdminResponse; title: string; children: ReactNode }) {
+export function PolicyView({ data, title, children, showFloor = true }: { data: PolicyAdminResponse; title: string; children: ReactNode; showFloor?: boolean }) {
   return (
     <PolicyDraftProvider data={data}>
-      <Body title={title}>{children}</Body>
+      <Body title={title} showFloor={showFloor}>{children}</Body>
     </PolicyDraftProvider>
   );
 }

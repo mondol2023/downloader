@@ -46,9 +46,11 @@ export function PolicyDraftProvider({ data, children }: { data: PolicyAdminRespo
   const set = useCallback(
     (path: string, value: unknown) => {
       setErrors((e) => {
-        if (!(path in e)) return e;
+        // Editing the rule list clears every per-rule error (their indexes may have shifted).
+        const stale = Object.keys(e).filter((k) => k === path || (path === "rules" && k.startsWith("rules.")));
+        if (!stale.length) return e;
         const rest = { ...e };
-        delete rest[path];
+        for (const k of stale) delete rest[k];
         return rest;
       });
       setDraft((d) => edit(data.active, d, path, value));

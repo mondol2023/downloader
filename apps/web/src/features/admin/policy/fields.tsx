@@ -106,7 +106,7 @@ export function TextField({ path, label, hint, multiline }: { path: string; labe
   );
 }
 
-const HOST = /^(?=.{1,253}$)([a-z0-9-]+\.)+[a-z0-9-]+$/;
+export const HOST = /^(?=.{1,253}$)([a-z0-9-]+\.)+[a-z0-9-]+$/;
 /** Pull a bare hostname out of whatever was pasted: URL, `www.` prefix, trailing slash. */
 export function cleanHost(raw: string): string {
   let h = raw.trim().toLowerCase();

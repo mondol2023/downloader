@@ -148,7 +148,9 @@ test("a 422 shows its message next to the field", async ({ page, context }) => {
   }));
 
   await page.goto("/admin/restrictions");
+  await page.getByTestId("builtin-maxDuration").getByRole("button", { name: "Edit" }).click();
   await page.getByLabel("Max duration (seconds)").fill("100");
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Review changes (1)" }).click();
   await page.getByLabel(/^Note/).fill("too short");
   await page.getByRole("button", { name: "Publish" }).click();

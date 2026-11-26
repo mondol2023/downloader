@@ -1,7 +1,7 @@
 import { Card } from "@/components/ui";
 import type { PolicyAdminResponse } from "./types";
 
-const LABELS: Record<string, string> = {
+export const LABELS: Record<string, string> = {
   SOURCE_PRIVATE: "Private",
   SOURCE_MEMBERS_ONLY: "Members-only",
   SOURCE_NEEDS_LOGIN: "Login required",
