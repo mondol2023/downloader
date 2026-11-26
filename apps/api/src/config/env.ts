@@ -32,6 +32,9 @@ const schema = z.object({
   COOKIE_DOMAIN: z.string().default('localhost'),
   COOKIE_SECURE: bool.default(false),
 
+  /** Option B (Vercel): resolve media through an HTTP extractor instead of spawning yt-dlp. GET ?url=<page URL> must return yt-dlp `--dump-single-json` shaped JSON. */
+  EXTRACTOR_API_URL: z.string().url().optional(),
+  EXTRACTOR_API_KEY: z.string().optional(),
   YTDLP_PATH: z.string().default('yt-dlp'),
   FFMPEG_PATH: z.string().default('ffmpeg'),
   FFPROBE_PATH: z.string().default('ffprobe'),

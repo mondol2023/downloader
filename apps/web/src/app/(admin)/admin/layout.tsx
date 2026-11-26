@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import type { MeResponse } from "@/lib/types";
 import { AdminShell } from "@/features/admin";
 
-const API = process.env.API_INTERNAL_URL ?? "http://localhost:4000";
+const API = process.env.API_INTERNAL_URL ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
 /** Convenience gate only: the API's requireRole is the real guard. */
 async function loadRole(): Promise<string | null> {
