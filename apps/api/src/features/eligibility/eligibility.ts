@@ -1,6 +1,5 @@
 import type { IneligibleCode } from '@media/shared';
-import { HARD_FLOOR } from '../restrictions/restrictions.config.js';
-import type { EffectivePolicy } from '../restrictions/policy.schema.js';
+import { ageCapOf, type BuiltinView } from '../restrictions/builtins.js';
 import { isBlockedHost } from './blocked-hosts.js';
 
 export interface EligibilityInput {
@@ -31,7 +30,7 @@ const refuse = (code: IneligibleCode): EligibilityVerdict => ({ eligible: false,
  */
 export function evaluateEligibility(
   input: EligibilityInput,
-  policy?: Pick<EffectivePolicy, 'global'>,
+  policy?: BuiltinView,
 ): EligibilityVerdict {
   if (isBlockedHost(input.host, policy)) return refuse('SOURCE_BLOCKED_DOMAIN');
 
@@ -49,8 +48,7 @@ export function evaluateEligibility(
       break; // public, unlisted, null and anything yt-dlp adds later are not refusals.
   }
 
-  const ageCap = Math.min(policy?.global.ageLimitMax ?? HARD_FLOOR.maxAgeLimit, HARD_FLOOR.maxAgeLimit);
-  if (input.ageLimit > ageCap) return refuse('SOURCE_AGE_RESTRICTED');
+  if (input.ageLimit > ageCapOf(policy)) return refuse('SOURCE_AGE_RESTRICTED');
 
   if (input.liveStatus === 'is_live' || input.liveStatus === 'is_upcoming') return refuse('SOURCE_LIVE');
 

@@ -1,5 +1,5 @@
 import { HARD_FLOOR } from '../restrictions/restrictions.config.js';
-import type { EffectivePolicy } from '../restrictions/policy.schema.js';
+import { extraBlockedHostsOf, type BuiltinView } from '../restrictions/builtins.js';
 
 function normalise(host: string): string {
   return host.trim().toLowerCase().replace(/\.$/, '');
@@ -10,10 +10,10 @@ function normalise(host: string): string {
  * label boundary, so `notnetflix.com` is not blocked by `netflix.com`.
  * The code-only hard floor always applies; admins can only add to it.
  */
-export function isBlockedHost(host: string, policy?: Pick<EffectivePolicy, 'global'>): boolean {
+export function isBlockedHost(host: string, policy?: BuiltinView): boolean {
   const h = normalise(host);
   if (!h) return false;
-  const blocked = [...HARD_FLOOR.blockedHosts, ...(policy?.global.extraBlockedHosts ?? [])];
+  const blocked = [...HARD_FLOOR.blockedHosts, ...extraBlockedHostsOf(policy)];
   return blocked.some((b) => {
     const base = normalise(b);
     return h === base || h.endsWith(`.${base}`);

@@ -8,6 +8,7 @@ import {
 } from '@media/shared';
 import { AppError } from '../../lib/errors.js';
 import { refusalError } from '../eligibility/refusal.js';
+import { maxDurationOf } from './builtins.js';
 import { getPolicy } from './policy.current.js';
 import { PLATFORM_IDS, type EffectivePolicy, type PlatformId } from './policy.schema.js';
 
@@ -54,8 +55,8 @@ export function assertDownloadsOpen(): void {
 /** 422 SOURCE_TOO_LONG. An unknown duration is let through: yt-dlp does not always report one. */
 export function assertDurationAllowed(durationSeconds: number | null | undefined): void {
   if (durationSeconds == null) return;
-  const max = getPolicy().global.maxDurationSec;
-  if (durationSeconds > max) {
+  const max = maxDurationOf(getPolicy());
+  if (max !== null && durationSeconds > max) {
     const minutes = Math.floor(max / 60);
     throw new AppError(
       422,
