@@ -3,7 +3,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Badge, Button, Sheet } from "@/components/ui";
 import { ApiError, api, fieldErrors } from "@/lib/api";
+import type { BuiltinToggleId, Rule } from "@media/shared";
 import { formatValue } from "./draft";
+import { diffRules } from "./rules/ruleModel";
 import type { PreviewResponse, Tier, Verdict } from "./types";
 import { TIERS } from "./types";
 import { usePolicyDraft } from "./usePolicyDraft";
@@ -22,6 +24,8 @@ function VerdictCard({ title, v }: { title: string; v: Verdict }) {
           <span className="block text-muted">{v.refusal.message}</span>
         </p>
       )}
+      {v.rule && <p className="text-muted">Rule: {v.rule.name}</p>}
+      {v.blockedActions.length > 0 && <p className="text-muted">Blocked: {v.blockedActions.join(", ")}</p>}
       {v.formats && (
         <p className="text-muted">
           {v.formats.allowed}/{v.formats.total} formats open
@@ -76,6 +80,19 @@ function TestUrl() {
   );
 }
 
+const RULE_PATHS = ["rules", "disabledBuiltins"];
+
+/** Rule-list changes read as lines ("Added: No shorts"), not as a JSON dump. */
+function ruleLines(changes: ReturnType<typeof usePolicyDraft>["changes"]): string[] {
+  const get = <T,>(path: string, side: "from" | "to") => (changes.find((c) => c.path === path)?.[side] ?? []) as T[];
+  return diffRules(
+    get<Rule>("rules", "from"),
+    get<Rule>("rules", "to"),
+    get<BuiltinToggleId>("disabledBuiltins", "from"),
+    get<BuiltinToggleId>("disabledBuiltins", "to"),
+  );
+}
+
 export function ReviewSheet() {
   const { changes, overrides, discard, errors, setErrors } = usePolicyDraft();
   const qc = useQueryClient();
@@ -116,7 +133,7 @@ export function ReviewSheet() {
               </tr>
             </thead>
             <tbody>
-              {changes.map((c) => (
+              {changes.filter((c) => !RULE_PATHS.includes(c.path)).map((c) => (
                 <tr key={c.path} className="border-t border-line align-top" data-testid="diff-row">
                   <td className="num break-all py-2 pr-2 text-xs">
                     {c.path}
@@ -126,6 +143,23 @@ export function ReviewSheet() {
                   <td className="num py-2">{formatValue(c.to)}</td>
                 </tr>
               ))}
+              {changes.some((c) => RULE_PATHS.includes(c.path)) && (
+                <tr className="border-t border-line align-top" data-testid="diff-row">
+                  <td className="num py-2 pr-2 text-xs">
+                    rules
+                    {(errors.rules || errors.disabledBuiltins) && (
+                      <span className="block text-danger">{errors.rules ?? errors.disabledBuiltins}</span>
+                    )}
+                  </td>
+                  <td className="py-2 text-sm" colSpan={2}>
+                    <ul className="space-y-0.5">
+                      {ruleLines(changes).map((l) => (
+                        <li key={l}>{l}</li>
+                      ))}
+                    </ul>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </section>

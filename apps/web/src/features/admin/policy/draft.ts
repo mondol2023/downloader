@@ -32,7 +32,13 @@ export function leafPaths(obj: unknown, prefix = ""): string[] {
   return [prefix];
 }
 
-const editable = (p: SoftPolicy) => ({ global: p.global, tiers: p.tiers, platforms: p.platforms });
+const editable = (p: SoftPolicy) => ({
+  global: p.global,
+  tiers: p.tiers,
+  platforms: p.platforms,
+  rules: p.rules,
+  disabledBuiltins: p.disabledBuiltins,
+});
 
 /** What the editor shows for `path`: the draft edit if there is one, else the active value. */
 export const valueAt = (active: SoftPolicy, draft: Draft, path: string) =>

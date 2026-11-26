@@ -1,3 +1,5 @@
+import type { BuiltinToggleId, Rule } from "@media/shared";
+
 export const PLATFORM_IDS = [
   "youtube", "facebook", "instagram", "x", "tiktok", "reddit", "vimeo", "twitch",
   "dailymotion", "soundcloud", "bilibili", "pinterest", "linkedin", "tumblr",
@@ -17,6 +19,8 @@ export interface SoftPolicy {
     ageLimitMax: number;
     extraBlockedHosts: string[];
   };
+  rules: Rule[];
+  disabledBuiltins: BuiltinToggleId[];
   tiers: Record<string, Record<string, number | boolean | string[] | null>>;
   platforms: Record<string, { enabled: boolean; download: boolean; playback: boolean; maxHeight: number | null; note: string }>;
 }
@@ -40,6 +44,8 @@ export interface Verdict {
   allowed: boolean;
   refusal: { code: string; message: string } | null;
   formats: { total: number; allowed: number; locked: number } | null;
+  rule: { id: string; name: string } | null;
+  blockedActions: Array<"download" | "playback">;
 }
 export interface PreviewResponse {
   mediaId: string;

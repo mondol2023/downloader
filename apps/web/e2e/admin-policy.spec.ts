@@ -38,6 +38,8 @@ const base: SoftPolicy = {
   },
   tiers: { GUEST: { maxHeight: 480 }, FREE: { maxHeight: 720 }, PRO: { maxHeight: 2160 } },
   platforms,
+  rules: [],
+  disabledBuiltins: [],
 };
 
 /** A tiny in-memory policy store behind the mocked admin API. */
