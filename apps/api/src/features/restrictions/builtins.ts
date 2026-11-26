@@ -22,6 +22,14 @@ export function ageCapOf(p?: BuiltinView): number {
   return Math.min(p.global.ageLimitMax, HARD_FLOOR.maxAgeLimit);
 }
 
+/**
+ * True when 18+ media goes through the birthdate gate. Without a policy (hard floor only) it is
+ * false, so 18+ stays refused.
+ */
+export function adultGateOf(p?: BuiltinView): boolean {
+  return p?.global.adultGateEnabled === true;
+}
+
 /** Admin-added blocked hosts; the code-only DRM floor list is separate and always applies. */
 export function extraBlockedHostsOf(p?: BuiltinView): string[] {
   return !p || isOff(p, 'blockedHosts') ? [] : p.global.extraBlockedHosts;

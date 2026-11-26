@@ -34,11 +34,13 @@ import {
 import { enqueueMediaJob, removeQueuedJob } from '../queue/queues.js';
 import { recordAudit } from '../services/user.service.js';
 import {
+  assertAdultConfirmed,
   assertDownloadsOpen,
   assertPlatformAllowed,
   assertRulesAllowAction,
   tierPolicyFor,
 } from '../features/restrictions/enforce.js';
+import { BIRTHDATE_HEADER } from '../features/restrictions/age-gate.js';
 
 const router = Router();
 
@@ -72,6 +74,9 @@ router.post(
     assertStorageAvailable(await readStorageUsage(redis), gbToBytes(env.STORAGE_MAX_GB));
 
     const record = await extractMedia(input.url, { tier });
+    // Before quota is reserved. The birthdate is deliberately not copied into the job or the queue
+    // payload: the worker re-checks the policy, not the person.
+    assertAdultConfirmed(record.media.ageLimit, req.header(BIRTHDATE_HEADER));
     const format = findFormat(record, input.formatId);
     const platform = record.media.platform;
     const policy = tierPolicyFor(tier, platform);

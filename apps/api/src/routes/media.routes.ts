@@ -18,11 +18,13 @@ import { getQuotaSnapshot, quotaIdentity } from '../services/quota.service.js';
 import { env } from '../config/env.js';
 import { resolveUserRegion } from '../features/regions/region.js';
 import {
+  assertAdultConfirmed,
   assertPlatformAllowed,
   assertRulesAllowAction,
   assertRulesAllowRecord,
   tierPolicyFor,
 } from '../features/restrictions/enforce.js';
+import { BIRTHDATE_HEADER } from '../features/restrictions/age-gate.js';
 
 const router = Router();
 
@@ -55,6 +57,8 @@ router.post(
       userRegion: resolveUserRegion(req, env),
       tier: req.identity.tier,
     });
+    // After extraction (the rating is only known then), before anything reaches the client.
+    assertAdultConfirmed(record.media.ageLimit, req.header(BIRTHDATE_HEADER));
 
     const result = gateRecord(record, req.identity.tier);
 
@@ -86,6 +90,7 @@ router.get(
     const record = await getCachedRecord(req.params.mediaId as string);
     if (!record) throw AppError.notFound('That media is not cached; submit the URL again.');
     assertRulesAllowRecord(record, req.identity.tier);
+    assertAdultConfirmed(record.media.ageLimit, req.header(BIRTHDATE_HEADER));
     res.json({ data: gateRecord(record, req.identity.tier) });
   }),
 );
@@ -112,6 +117,7 @@ router.post(
     }
 
     const record = await extractMedia(input.url, { tier: req.identity.tier });
+    assertAdultConfirmed(record.media.ageLimit, req.header(BIRTHDATE_HEADER));
     const format = findFormat(record, input.formatId);
     assertPlatformAllowed(record.media.platform, 'playback');
     assertRulesAllowAction(
@@ -158,6 +164,7 @@ router.get(
     const record = await getCachedRecord(req.params.mediaId as string);
     if (!record) throw AppError.notFound('That media is not cached; submit the URL again.');
     assertRulesAllowRecord(record, req.identity.tier);
+    assertAdultConfirmed(record.media.ageLimit, req.header(BIRTHDATE_HEADER));
 
     const source = record.subtitleSources[lang];
     if (!source) throw AppError.notFound('No subtitles for that language');

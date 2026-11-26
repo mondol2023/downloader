@@ -37,6 +37,8 @@ export const HARD_FLOOR: Readonly<{
     'tidal.com',
     'deezer.com',
   ]),
+  // Media rated 18+ is not refused here: it goes through the birthdate gate (age-gate.ts) unless
+  // an admin turns `global.adultGateEnabled` off, which restores the outright refusal.
   maxAgeLimit: 17,
 });
 
@@ -76,6 +78,7 @@ export const DEFAULT_POLICY: SoftPolicy = {
     maxDurationSec: 4 * 60 * 60,
     allowLiveVod: true,
     ageLimitMax: HARD_FLOOR.maxAgeLimit,
+    adultGateEnabled: true,
     extraBlockedHosts: [],
   },
   tiers: defaultTiers(),

@@ -40,6 +40,9 @@ const { isIneligibleCode } = await import('../../../src/services/extraction.serv
 const { normaliseSourceUrl } = await import('../../../src/lib/source-url.js');
 const { CommandError } = await import('../../../src/lib/exec.js');
 const { AppError } = await import('../../../src/lib/errors.js');
+const { DEFAULT_POLICY } = await import('../../../src/features/restrictions/restrictions.config.js');
+const { mergePolicy } = await import('../../../src/features/restrictions/merge.js');
+const { setCurrentPolicy } = await import('../../../src/features/restrictions/policy.current.js');
 
 function fixture(name: string): Record<string, any> {
   return JSON.parse(readFileSync(new URL(`../../fixtures/ytdlp/${name}.json`, import.meta.url), 'utf8'));
@@ -89,9 +92,15 @@ describe('buildRecord eligibility', () => {
     expect(refusal(() => buildRecord(generic, payload))).toMatchObject({ code: 'SOURCE_DRM' });
   });
 
-  it('age_limit 18 → SOURCE_AGE_RESTRICTED; live → SOURCE_LIVE', () => {
+  it('age_limit 18 builds a record while the adult gate is on, refuses with it off; live → SOURCE_LIVE', () => {
     const aged = { ...fixture('drm-mixed'), age_limit: 18 };
-    expect(refusal(() => buildRecord(generic, aged))).toMatchObject({ code: 'SOURCE_AGE_RESTRICTED' });
+    expect(buildRecord(generic, aged).media.ageLimit).toBe(18);
+    setCurrentPolicy(mergePolicy(DEFAULT_POLICY, { global: { adultGateEnabled: false } }, 2));
+    try {
+      expect(refusal(() => buildRecord(generic, aged))).toMatchObject({ code: 'SOURCE_AGE_RESTRICTED' });
+    } finally {
+      setCurrentPolicy(mergePolicy(DEFAULT_POLICY, {}, 1));
+    }
     const live = { ...fixture('drm-mixed'), live_status: 'is_live', is_live: true };
     expect(refusal(() => buildRecord(generic, live))).toMatchObject({ code: 'SOURCE_LIVE' });
   });

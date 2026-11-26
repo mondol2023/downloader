@@ -44,14 +44,28 @@ describe('builtin helpers', () => {
 });
 
 describe('the hard floor survives disabled built-ins', () => {
-  it('still refuses age 18 when the ageLimit built-in is off', () => {
-    const p = policy({ global: { ageLimitMax: 12 }, disabledBuiltins: ['ageLimit'] });
+  it('still refuses age 18 when the ageLimit built-in is off and the adult gate is off', () => {
+    const p = policy({ global: { ageLimitMax: 12, adultGateEnabled: false }, disabledBuiltins: ['ageLimit'] });
     expect(evaluateEligibility({ ...media, ageLimit: 18 }, p)).toEqual({
       eligible: false,
       code: 'SOURCE_AGE_RESTRICTED',
     });
     // The admin's stricter 12 is off, so 16 passes, but the floor's 17 still holds.
     expect(evaluateEligibility({ ...media, ageLimit: 16 }, p)).toMatchObject({ eligible: true });
+  });
+
+  it('hands 18+ to the birthdate gate when adultGateEnabled is on, but still caps below 18', () => {
+    const p = policy({ global: { ageLimitMax: 12 } });
+    expect(p.global.adultGateEnabled).toBe(true);
+    expect(evaluateEligibility({ ...media, ageLimit: 18 }, p)).toMatchObject({ eligible: true });
+    expect(evaluateEligibility({ ...media, ageLimit: 16 }, p)).toMatchObject({
+      eligible: false,
+      code: 'SOURCE_AGE_RESTRICTED',
+    });
+  });
+
+  it('keeps refusing 18+ with no policy at all (hard floor only)', () => {
+    expect(evaluateEligibility({ ...media, ageLimit: 18 })).toEqual({ eligible: false, code: 'SOURCE_AGE_RESTRICTED' });
   });
 
   it('applies the admin age cap while the built-in is on', () => {

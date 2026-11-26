@@ -1,5 +1,6 @@
 import type { IneligibleCode } from '@media/shared';
-import { ageCapOf, type BuiltinView } from '../restrictions/builtins.js';
+import { ADULT_AGE } from '../restrictions/age-gate.js';
+import { adultGateOf, ageCapOf, type BuiltinView } from '../restrictions/builtins.js';
 import { isBlockedHost } from './blocked-hosts.js';
 
 export interface EligibilityInput {
@@ -26,7 +27,8 @@ const refuse = (code: IneligibleCode): EligibilityVerdict => ({ eligible: false,
  * Pure. Check order: blocked host → taken down → private → members → needs_auth → age → live → DRM.
  *
  * Without `policy` only the code-only hard floor applies; with it, the admin's extra
- * blocked hosts and a stricter age cap apply too. A policy can tighten, never loosen.
+ * blocked hosts and a stricter age cap apply too. A policy can tighten, never loosen, except that
+ * `adultGateEnabled` hands 18+ media to the birthdate gate instead of refusing it.
  */
 export function evaluateEligibility(
   input: EligibilityInput,
@@ -48,7 +50,12 @@ export function evaluateEligibility(
       break; // public, unlisted, null and anything yt-dlp adds later are not refusals.
   }
 
-  if (input.ageLimit > ageCapOf(policy)) return refuse('SOURCE_AGE_RESTRICTED');
+  // 18+ is the birthdate gate's call when the policy enables it; ageLimitMax caps everything below.
+  if (input.ageLimit >= ADULT_AGE) {
+    if (!adultGateOf(policy)) return refuse('SOURCE_AGE_RESTRICTED');
+  } else if (input.ageLimit > ageCapOf(policy)) {
+    return refuse('SOURCE_AGE_RESTRICTED');
+  }
 
   if (input.liveStatus === 'is_live' || input.liveStatus === 'is_upcoming') return refuse('SOURCE_LIVE');
 

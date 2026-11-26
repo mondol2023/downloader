@@ -11,7 +11,9 @@ export {
 } from './policy.schema.js';
 export { RULES_MAX, disabledBuiltinsSchema, rulesSchema } from './rules.schema.js';
 export { mergePolicy, toPublicPolicy } from './merge.js';
+export { ADULT_AGE, BIRTHDATE_HEADER, ageOn, parseBirthdate } from './age-gate.js';
 export {
+  assertAdultConfirmed,
   assertDownloadsOpen,
   assertDurationAllowed,
   assertExtractionOpen,

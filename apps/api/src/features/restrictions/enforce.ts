@@ -11,7 +11,8 @@ import { AppError } from '../../lib/errors.js';
 import { normaliseSourceUrl } from '../../lib/source-url.js';
 import type { ExtractionRecord } from '../../services/extraction.service.js';
 import { refusalError } from '../eligibility/refusal.js';
-import { maxDurationOf } from './builtins.js';
+import { ADULT_AGE, assertAdultConfirmed } from './age-gate.js';
+import { adultGateOf, maxDurationOf } from './builtins.js';
 import { getPolicy } from './policy.current.js';
 import { evaluateRules, ruleHeightCap } from './rules.js';
 import { PLATFORM_IDS, type EffectivePolicy, type PlatformId } from './policy.schema.js';
@@ -95,8 +96,9 @@ export function assertRulesAllowMedia(
   media: Pick<MediaMetadata, 'platform' | 'durationSeconds' | 'ageLimit' | 'title' | 'uploader'>,
   tier: Tier,
 ): void {
+  const policy = getPolicy();
   refuseByRule(
-    evaluateRules(getPolicy(), {
+    evaluateRules(policy, {
       stage: 'metadata',
       tier,
       platform: media.platform,
@@ -106,7 +108,12 @@ export function assertRulesAllowMedia(
       uploader: media.uploader,
     }),
   );
+  // A record cached while the adult gate was on must not outlive the admin switching it off. This
+  // runs for the worker and cached reads too; the birthdate itself is checked by the routes.
+  if (media.ageLimit >= ADULT_AGE && !adultGateOf(policy)) throw refusalError('SOURCE_AGE_RESTRICTED');
 }
+
+export { assertAdultConfirmed };
 
 /** Action stage: a download or playback on a platform or host an admin has restricted. */
 export function assertRulesAllowAction(

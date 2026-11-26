@@ -28,8 +28,13 @@ export interface SoftPolicy {
     downloadsEnabled: boolean;
     maxDurationSec: number;
     allowLiveVod: boolean;
-    /** ≤ 17: the hard floor always refuses age_limit >= 18. */
+    /** ≤ 17: caps media rated below 18. Media rated 18+ is governed by `adultGateEnabled`. */
     ageLimitMax: number;
+    /**
+     * On: 18+ media is served only to requests that confirm a birthdate of 18 or over, every time.
+     * Off: 18+ media is refused outright (SOURCE_AGE_RESTRICTED).
+     */
+    adultGateEnabled: boolean;
     extraBlockedHosts: string[];
   };
   tiers: Record<Tier, Pick<TierPolicy, TierSoftKey>>;
@@ -71,6 +76,7 @@ const globalSchema = z
     maxDurationSec: positive,
     allowLiveVod: z.boolean(),
     ageLimitMax: z.number().int().min(0).max(17),
+    adultGateEnabled: z.boolean(),
     extraBlockedHosts: z.array(hostname).max(500),
   })
   .partial()

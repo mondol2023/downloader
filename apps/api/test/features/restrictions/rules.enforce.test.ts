@@ -236,10 +236,15 @@ function fixture(): Record<string, unknown> {
   return { ...payload, duration: 600 };
 }
 
-async function send(method: 'GET' | 'POST', path: string, body?: unknown): Promise<{ status: number; json: any }> {
+async function send(
+  method: 'GET' | 'POST',
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; json: any }> {
   const res = await fetch(`${base}${path}`, {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...headers },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   return { status: res.status, json: await res.json().catch(() => null) };
@@ -314,5 +319,85 @@ describe('cached lookups apply rules too', () => {
     const res = await send('GET', `/media/${id}/subtitles/en`);
     expect(res.status).toBe(403);
     expect(res.json.error.code).toBe('SOURCE_RULE_BLOCKED');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The 18+ birthdate gate
+// ---------------------------------------------------------------------------------------------
+
+describe('18+ birthdate gate', () => {
+  const ADULT = { 'x-birthdate': '1990-06-15' };
+  const MINOR = { 'x-birthdate': new Date(Date.now() - 10 * 365 * 86_400_000).toISOString().slice(0, 10) };
+  const adultFixture = () => ({ ...fixture(), age_limit: 18 });
+  const gateOff = () => setCurrentPolicy(mergePolicy(DEFAULT_POLICY, { global: { adultGateEnabled: false } } as never, 1));
+
+  beforeEach(() => {
+    runCommand.mockImplementation(async () => ({ stdout: JSON.stringify(adultFixture()) }));
+  });
+
+  it('asks for a birthdate on every extract, even for a record that is already cached', async () => {
+    const first = await send('POST', '/media/extract', { url: YT });
+    expect(first.status).toBe(403);
+    expect(first.json.error.code).toBe('AGE_CONFIRMATION_REQUIRED');
+
+    expect((await send('POST', '/media/extract', { url: YT }, ADULT)).status).toBe(200);
+    // The earlier answer is not remembered: the same caller is asked again.
+    const again = await send('POST', '/media/extract', { url: YT });
+    expect(again.status).toBe(403);
+    expect(again.json.error.code).toBe('AGE_CONFIRMATION_REQUIRED');
+  });
+
+  it('refuses a minor and a malformed birthdate without echoing it back', async () => {
+    const minor = await send('POST', '/media/extract', { url: YT }, MINOR);
+    expect(minor.status).toBe(403);
+    expect(minor.json.error.code).toBe('AGE_UNDER_18');
+    expect(JSON.stringify(minor.json)).not.toContain(MINOR['x-birthdate']);
+
+    const bad = await send('POST', '/media/extract', { url: YT }, { 'x-birthdate': 'yesterday' });
+    expect(bad.status).toBe(400);
+    expect(bad.json.error.code).toBe('INVALID_BIRTHDATE');
+  });
+
+  it('does not gate media that is not 18+', async () => {
+    runCommand.mockImplementation(async () => ({ stdout: JSON.stringify(fixture()) }));
+    expect((await send('POST', '/media/extract', { url: YT })).status).toBe(200);
+  });
+
+  it('a download needs the birthdate too, and no job is created without it', async () => {
+    const res = await send('POST', '/jobs', { url: YT, formatId: 'clear-360' });
+    expect(res.status).toBe(403);
+    expect(res.json.error.code).toBe('AGE_CONFIRMATION_REQUIRED');
+    expect(jobCreate).not.toHaveBeenCalled();
+  });
+
+  it('cached reads and subtitles ask as well', async () => {
+    const id = normaliseSourceUrl(YT).mediaId;
+    strings.set(
+      `media:extract:${id}`,
+      JSON.stringify({
+        media: { ...media, ageLimit: 18, id, sourceUrl: YT, canonicalUrl: YT, subtitles: [], chapters: [] },
+        formats: [],
+        urls: {},
+        subtitleSources: { en: { url: 'https://upstream.invalid/subs.vtt', ext: 'vtt', auto: false, label: 'English' } },
+        fetchedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      }),
+    );
+    for (const path of [`/media/${id}`, `/media/${id}/subtitles/en`]) {
+      const res = await send('GET', path);
+      expect(res.status).toBe(403);
+      expect(res.json.error.code).toBe('AGE_CONFIRMATION_REQUIRED');
+    }
+    expect((await send('GET', `/media/${id}`, undefined, ADULT)).status).toBe(200);
+  });
+
+  it('turning the gate off refuses 18+ outright, including a record cached while it was on', async () => {
+    expect((await send('POST', '/media/extract', { url: YT }, ADULT)).status).toBe(200);
+    gateOff();
+    const res = await send('POST', '/media/extract', { url: YT }, ADULT);
+    expect(res.status).toBe(403);
+    expect(res.json.error.code).toBe('SOURCE_AGE_RESTRICTED');
+    expect(() => enforce.assertRulesAllowMedia({ ...media, ageLimit: 18 }, 'GUEST')).toThrow();
   });
 });
