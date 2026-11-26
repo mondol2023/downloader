@@ -27,7 +27,7 @@ const patchBody = z.object({
   contentJson: docSchema.optional(),
   ...seo,
 });
-const listQuery = pageQuery.extend({ status: z.enum(STATUSES).optional() });
+const listQuery = pageQuery.extend({ status: z.enum(STATUSES).optional(), q: z.string().trim().max(80).optional() });
 const scheduleBody = z.object({ publishAt: z.coerce.date() });
 const blockBody = z.object({ contentJson: docSchema });
 const altBody = z.object({ alt: z.string().trim().min(1).max(300) });
@@ -44,11 +44,14 @@ router.get(
   asyncHandler(async (req, res) => {
     const q = listQuery.parse(req.query);
     const rows = await prisma.cmsPage.findMany({
-      where: q.status ? { status: q.status } : {},
+      where: {
+        ...(q.status ? { status: q.status } : {}),
+        ...(q.q ? { OR: [{ title: { contains: q.q, mode: 'insensitive' as const } }, { slug: { contains: q.q, mode: 'insensitive' as const } }] } : {}),
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       select: {
         id: true, slug: true, title: true, status: true, version: true, publishAt: true,
-        publishedAt: true, updatedAt: true, createdAt: true,
+        publishedAt: true, updatedAt: true, createdAt: true, updatedById: true,
       },
       ...pageArgs(q),
     });
@@ -232,6 +235,15 @@ router.post(
     });
     setAudit(res, { action: 'cms.page.restore', target: `cms-page:${id}`, after: { restoredFrom: version, version: page.version } });
     res.json({ data: page });
+  }),
+);
+
+/** Every stored block with its Tiptap JSON, so the admin can open each in the editor. */
+router.get(
+  '/blocks',
+  asyncHandler(async (_req, res) => {
+    const items = await prisma.cmsBlock.findMany({ orderBy: { key: 'asc' } });
+    res.json({ data: { items } });
   }),
 );
 
