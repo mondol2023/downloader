@@ -2,7 +2,7 @@ import { mkdir, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { DelayedError, Queue, Worker, type Job as BullJob } from 'bullmq';
 import type { Job as JobRow, JobState as DbJobState } from '@prisma/client';
-import type { JobProgress, JobState, MediaFormat } from '@media/shared';
+import type { JobProgress, JobState, MediaFormat, Tier } from '@media/shared';
 import { isUnlimited } from '@media/shared';
 import { env } from '../config/env.js';
 import { AppError } from '../lib/errors.js';
@@ -29,7 +29,13 @@ import {
   startSheetsMirrorFromEnv,
 } from '../features/persistence/index.js';
 import { commitDownload, release, releaseSlot } from '../services/quota.service.js';
-import { assertDownloadsOpen, assertPlatformAllowed, tierPolicyFor } from '../features/restrictions/enforce.js';
+import {
+  assertDownloadsOpen,
+  assertPlatformAllowed,
+  assertRulesAllowAction,
+  assertRulesAllowSource,
+  tierPolicyFor,
+} from '../features/restrictions/enforce.js';
 import { startPolicyStore, stopPolicyStore } from '../features/restrictions/policy.store.js';
 import { ensureEngineAvailable, initToolVersions } from '../features/health/index.js';
 import { isRegionalRegion, regionalQueueName } from '../features/regions/region.js';
@@ -210,7 +216,7 @@ async function processMediaJob(job: BullJob<MediaJobPayload>): Promise<void> {
     }
 
     // The admin may have paused downloads or switched the site off since this was queued.
-    await recheckPolicy(payload.sourceUrl);
+    await recheckPolicy(payload.sourceUrl, payload.tier);
 
     await transition(jobId, 'EXTRACTING', {
       startedAt: row.startedAt ?? new Date(),
@@ -221,7 +227,7 @@ async function processMediaJob(job: BullJob<MediaJobPayload>): Promise<void> {
 
     // Cached in Redis from the enqueue-time extraction in the common case, so
     // this is usually free; it re-runs only if the cache expired underneath us.
-    const record = await extractMediaOrRefuse(payload.sourceUrl, controller.signal);
+    const record = await extractMediaOrRefuse(payload.sourceUrl, controller.signal, payload.tier);
     const format = findFormat(record, payload.formatId);
 
     await mkdir(workDir, { recursive: true });
@@ -348,7 +354,7 @@ async function processMediaJob(job: BullJob<MediaJobPayload>): Promise<void> {
  * downloads, or switched its platform off, fails with the same typed code the API would have
  * returned. It is permanent, so the reservation is released and the user is not charged.
  */
-async function recheckPolicy(sourceUrl: string): Promise<void> {
+async function recheckPolicy(sourceUrl: string, tier: Tier): Promise<void> {
   try {
     // A tool that probed null at boot is re-probed (throttled) before the job is refused.
     await ensureEngineAvailable({ ytDlp: env.YTDLP_PATH, ffmpeg: env.FFMPEG_PATH, ffprobe: env.FFPROBE_PATH });
@@ -356,6 +362,9 @@ async function recheckPolicy(sourceUrl: string): Promise<void> {
     assertDownloadsOpen();
     const source = normaliseSourceUrl(sourceUrl); // also applies the platform and blocked-host rules
     assertPlatformAllowed(source.platform, 'download');
+    // A rule published while the job sat in the queue still applies.
+    assertRulesAllowSource(source, tier);
+    assertRulesAllowAction({ action: 'download', platform: source.platform, canonicalUrl: source.canonical }, tier);
   } catch (err) {
     if (err instanceof AppError) throw new UnrecoverableJobError(`${err.code}: ${err.message}`);
     throw err;
@@ -363,9 +372,9 @@ async function recheckPolicy(sourceUrl: string): Promise<void> {
 }
 
 /** A typed 4xx refusal (policy, eligibility, duration) will not change on retry. */
-async function extractMediaOrRefuse(sourceUrl: string, signal: AbortSignal) {
+async function extractMediaOrRefuse(sourceUrl: string, signal: AbortSignal, tier: Tier) {
   try {
-    return await extractMedia(sourceUrl, { signal });
+    return await extractMedia(sourceUrl, { signal, tier });
   } catch (err) {
     if (err instanceof AppError && (err.status === 403 || err.status === 422 || err.status === 451)) {
       throw new UnrecoverableJobError(`${err.code}: ${err.message}`);

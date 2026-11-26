@@ -3,13 +3,17 @@ import {
   TIERS,
   type FormatConstraintInput,
   type LockReason,
+  type MediaMetadata,
   type Tier,
   type TierPolicy,
 } from '@media/shared';
 import { AppError } from '../../lib/errors.js';
+import { normaliseSourceUrl } from '../../lib/source-url.js';
+import type { ExtractionRecord } from '../../services/extraction.service.js';
 import { refusalError } from '../eligibility/refusal.js';
 import { maxDurationOf } from './builtins.js';
 import { getPolicy } from './policy.current.js';
+import { evaluateRules, ruleHeightCap } from './rules.js';
 import { PLATFORM_IDS, type EffectivePolicy, type PlatformId } from './policy.schema.js';
 
 export type PlatformAction = 'extract' | 'download' | 'playback';
@@ -66,6 +70,69 @@ export function assertDurationAllowed(durationSeconds: number | null | undefined
   }
 }
 
+function refuseByRule(hit: { message: string } | null): void {
+  if (hit) throw new AppError(403, 'SOURCE_RULE_BLOCKED', hit.message);
+}
+
+/** Source stage: host, platform, URL pattern and tier-only rules, before any cache or yt-dlp. */
+export function assertRulesAllowSource(
+  source: { canonical: string; host: string; platform: string },
+  tier: Tier,
+): void {
+  refuseByRule(
+    evaluateRules(getPolicy(), {
+      stage: 'source',
+      tier,
+      url: source.canonical,
+      host: source.host,
+      platform: source.platform,
+    }),
+  );
+}
+
+/** Metadata stage: keyword, duration and age rules on what the extractor reported. */
+export function assertRulesAllowMedia(
+  media: Pick<MediaMetadata, 'platform' | 'durationSeconds' | 'ageLimit' | 'title' | 'uploader'>,
+  tier: Tier,
+): void {
+  refuseByRule(
+    evaluateRules(getPolicy(), {
+      stage: 'metadata',
+      tier,
+      platform: media.platform,
+      durationSeconds: media.durationSeconds,
+      ageLimit: media.ageLimit,
+      title: media.title,
+      uploader: media.uploader,
+    }),
+  );
+}
+
+/** Action stage: a download or playback on a platform or host an admin has restricted. */
+export function assertRulesAllowAction(
+  input: { action: 'download' | 'playback'; platform: string; canonicalUrl: string },
+  tier: Tier,
+): void {
+  let host = '';
+  try {
+    host = new URL(input.canonicalUrl).hostname;
+  } catch {
+    // An unparseable URL has no host to match; platform-scoped rules still apply.
+  }
+  refuseByRule(
+    evaluateRules(getPolicy(), { stage: 'action', tier, action: input.action, host, platform: input.platform }),
+  );
+}
+
+/**
+ * Source and metadata stages against a record read from the cache rather than extracted, so the
+ * cached lookups cannot be used to get around a rule.
+ */
+export function assertRulesAllowRecord(record: ExtractionRecord, tier: Tier): void {
+  assertRulesAllowSource(normaliseSourceUrl(record.media.sourceUrl, { skipPolicy: true }), tier);
+  assertRulesAllowMedia(record.media, tier);
+}
+
 /**
  * The limits a tier gets right now: the admin-tunable fields come from the runtime policy, the
  * static ones (label, queue priority) from @media/shared. With `platform`, the platform's own
@@ -84,6 +151,8 @@ export function tierPolicyIn(policy: EffectivePolicy, tier: Tier, platform?: str
     const cap = policy.platforms[platform].maxHeight;
     if (cap != null) maxHeight = Math.min(maxHeight, cap);
   }
+  // Admin rules can only lower the cap (Infinity when none apply).
+  maxHeight = Math.min(maxHeight, ruleHeightCap(policy, tier, platform));
   return { ...base, ...soft, maxHeight };
 }
 

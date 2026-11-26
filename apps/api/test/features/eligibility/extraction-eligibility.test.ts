@@ -139,7 +139,7 @@ describe('extractMedia refusal cache', () => {
   it('caches a refusal under elig:{mediaId} for 600s and skips yt-dlp on repeat', async () => {
     runCommand.mockResolvedValue({ stdout: JSON.stringify(fixture('private')) });
 
-    await expect(extractMedia('https://www.youtube.com/watch?v=abc')).rejects.toMatchObject({
+    await expect(extractMedia('https://www.youtube.com/watch?v=abc', { tier: 'GUEST' })).rejects.toMatchObject({
       code: 'SOURCE_PRIVATE',
     });
     expect(runCommand).toHaveBeenCalledTimes(1);
@@ -148,7 +148,7 @@ describe('extractMedia refusal cache', () => {
     expect(eligCall).toBeTruthy();
     expect(eligCall!.slice(2)).toEqual(['EX', 600]);
 
-    await expect(extractMedia('https://www.youtube.com/watch?v=abc')).rejects.toMatchObject({
+    await expect(extractMedia('https://www.youtube.com/watch?v=abc', { tier: 'GUEST' })).rejects.toMatchObject({
       status: 403,
       code: 'SOURCE_PRIVATE',
     });
@@ -158,18 +158,18 @@ describe('extractMedia refusal cache', () => {
   it('force bypasses the refusal cache', async () => {
     store.set(`elig:${yt.mediaId}`, JSON.stringify({ code: 'SOURCE_PRIVATE' }));
     runCommand.mockResolvedValue({ stdout: JSON.stringify(fixture('drm-mixed')) });
-    await expect(extractMedia('https://www.youtube.com/watch?v=abc', { force: true })).resolves.toBeTruthy();
+    await expect(extractMedia('https://www.youtube.com/watch?v=abc', { force: true, tier: 'GUEST' })).resolves.toBeTruthy();
   });
 
   it('does not cache transient failures', async () => {
     runCommand.mockRejectedValue(new CommandError('boom', 1, 'HTTP Error 500'));
-    await expect(extractMedia('https://www.youtube.com/watch?v=abc')).rejects.toBeTruthy();
+    await expect(extractMedia('https://www.youtube.com/watch?v=abc', { tier: 'GUEST' })).rejects.toBeTruthy();
     expect(store.has(`elig:${yt.mediaId}`)).toBe(false);
   });
 
   it('passes --xff never to yt-dlp', async () => {
     runCommand.mockResolvedValue({ stdout: JSON.stringify(fixture('drm-mixed')) });
-    await extractMedia('https://www.youtube.com/watch?v=abc', { force: true });
+    await extractMedia('https://www.youtube.com/watch?v=abc', { force: true, tier: 'GUEST' });
     const args: string[] = runCommand.mock.calls[0]![1].args;
     expect(args.slice(args.indexOf('--xff'), args.indexOf('--xff') + 2)).toEqual(['--xff', 'never']);
   });
@@ -192,7 +192,7 @@ describe('bot / IP-reputation challenges (not a private video)', () => {
     runCommand.mockRejectedValue(
       new CommandError('boom', 1, "ERROR: Sign in to confirm you're not a bot"),
     );
-    await expect(extractMedia('https://www.youtube.com/watch?v=abc')).rejects.toMatchObject({
+    await expect(extractMedia('https://www.youtube.com/watch?v=abc', { tier: 'GUEST' })).rejects.toMatchObject({
       code: 'SERVICE_UNAVAILABLE',
     });
     expect(store.has(`elig:${yt.mediaId}`)).toBe(false);
@@ -204,7 +204,7 @@ describe('SOURCE_GEOBLOCKED is never cached', () => {
     runCommand.mockRejectedValue(
       new CommandError('boom', 1, 'ERROR: [youtube] abc: Video unavailable. This video is not available in your country'),
     );
-    await expect(extractMedia('https://www.youtube.com/watch?v=abc')).rejects.toMatchObject({
+    await expect(extractMedia('https://www.youtube.com/watch?v=abc', { tier: 'GUEST' })).rejects.toMatchObject({
       code: 'SOURCE_GEOBLOCKED',
     });
     expect(store.has(`elig:${yt.mediaId}`)).toBe(false);

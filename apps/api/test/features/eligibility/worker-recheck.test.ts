@@ -226,6 +226,37 @@ describe('worker re-check', () => {
     expect(release).not.toHaveBeenCalled();
   });
 
+  it('a rule published while the job was queued fails it with SOURCE_RULE_BLOCKED and releases the reservation', async () => {
+    const { DEFAULT_POLICY } = await import('../../../src/features/restrictions/restrictions.config.js');
+    const { mergePolicy } = await import('../../../src/features/restrictions/merge.js');
+    const { setCurrentPolicy } = await import('../../../src/features/restrictions/policy.current.js');
+    const blocked = {
+      rules: [
+        {
+          id: 'r1',
+          name: 'No YouTube downloads',
+          type: 'block_platform',
+          enabled: true,
+          params: { platform: 'youtube', actions: ['download'] },
+        },
+      ],
+    };
+    setCurrentPolicy(mergePolicy(DEFAULT_POLICY, blocked as never, 1));
+    try {
+      await processors[0]!(bullJob(), 'tok');
+    } finally {
+      setCurrentPolicy(mergePolicy(DEFAULT_POLICY, {}, 1));
+    }
+
+    const failed = jobUpdate.mock.calls
+      .map(([arg]) => (arg as { data: { state?: string; error?: string } }).data)
+      .find((d) => d.state === 'FAILED');
+    expect(failed!.error).toMatch(/^SOURCE_RULE_BLOCKED: /);
+    expect(commitDownload).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
   it('platform caps apply in the worker: tierPolicyFor receives the host-derived platform', async () => {
     runCommand.mockResolvedValue({ stdout: '', stderr: '' });
     await processors[0]!(bullJob(), 'tok').catch(() => undefined);

@@ -26,6 +26,8 @@ import { bumpStat } from '../features/admin/stats-counters.js';
 import {
   assertDurationAllowed,
   assertExtractionOpen,
+  assertRulesAllowMedia,
+  assertRulesAllowSource,
   evaluateAccess,
   requiredTierFor,
   tierPolicyFor,
@@ -140,19 +142,25 @@ const LIVE_TTL_SECONDS = 30;
 const DEFAULT_TTL_SECONDS = 6 * 60 * 60;
 const LOCK_TTL_MS = 90_000;
 
+/** `tier` is required so a caller cannot skip the tier-scoped admin rules. */
+export interface ExtractOptions {
+  signal?: AbortSignal;
+  force?: boolean;
+  userRegion?: RegionCode | null;
+  tier: Tier;
+}
+
 /**
  * Resolves a URL to a record. The runtime policy is applied on every call, cache hit or not:
  * the platform switch inside `normaliseSourceUrl`, the extraction pause, and the duration cap, so
  * a limit an admin tightens takes effect for records that were cached under the old one.
  */
-export async function extractMedia(
-  rawUrl: string,
-  options: { signal?: AbortSignal; force?: boolean; userRegion?: RegionCode | null } = {},
-): Promise<ExtractionRecord> {
+export async function extractMedia(rawUrl: string, options: ExtractOptions): Promise<ExtractionRecord> {
   assertExtractionOpen();
   try {
     const record = await resolveRecord(rawUrl, options);
     assertDurationAllowed(record.media.durationSeconds);
+    assertRulesAllowMedia(record.media, options.tier);
     bumpStat('extracts', record.media.platform);
     return record;
   } catch (err) {
@@ -178,13 +186,13 @@ export async function extractMediaDirect(
   return record;
 }
 
-async function resolveRecord(
-  rawUrl: string,
-  options: { signal?: AbortSignal; force?: boolean; userRegion?: RegionCode | null },
-): Promise<ExtractionRecord> {
+async function resolveRecord(rawUrl: string, options: ExtractOptions): Promise<ExtractionRecord> {
   const source = normaliseSourceUrl(rawUrl);
   // Before any cache: a takedown must beat a record that was cached before it was decided.
   await assertNotTakenDown(source.mediaId);
+  // Also before any cache and outside the refusal cache below: a rule edit applies at once, and a
+  // rule refusal never outlives the rule.
+  assertRulesAllowSource(source, options.tier);
 
   if (!options.force) {
     const refused = await readRefusal(source.mediaId);

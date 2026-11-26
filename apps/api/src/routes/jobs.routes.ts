@@ -36,6 +36,7 @@ import { recordAudit } from '../services/user.service.js';
 import {
   assertDownloadsOpen,
   assertPlatformAllowed,
+  assertRulesAllowAction,
   tierPolicyFor,
 } from '../features/restrictions/enforce.js';
 
@@ -70,12 +71,13 @@ router.post(
     // Measured by the worker after each sweep/job; refuse before any quota is reserved.
     assertStorageAvailable(await readStorageUsage(redis), gbToBytes(env.STORAGE_MAX_GB));
 
-    const record = await extractMedia(input.url);
+    const record = await extractMedia(input.url, { tier });
     const format = findFormat(record, input.formatId);
     const platform = record.media.platform;
     const policy = tierPolicyFor(tier, platform);
 
     assertPlatformAllowed(platform, 'download');
+    assertRulesAllowAction({ action: 'download', platform, canonicalUrl: record.media.canonicalUrl }, tier);
     assertFormatAllowed(format, tier, platform);
     assertSizeAllowed(tier, format.sizeBytes);
 
