@@ -62,11 +62,11 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
       credentials: "include",
       ...rest,
       headers: {
-        ...(body !== undefined ? { "content-type": "application/json" } : {}),
+        ...(body !== undefined && !(body instanceof FormData) ? { "content-type": "application/json" } : {}),
         ...(csrf ? { "x-csrf-token": csrf } : {}),
         ...headers,
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body === undefined ? undefined : body instanceof FormData ? body : JSON.stringify(body),
     });
   };
 
