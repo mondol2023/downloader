@@ -35,11 +35,14 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
-    command: ['node', 'dist/index.js']
+    # Migrations are applied by the API on boot (idempotent); the worker waits on the API's health instead.
+    command: ['sh', '-c', 'npx prisma migrate deploy && node dist/index.js']
     env_file: .env
     environment:
       DATABASE_URL: postgresql://media:media@postgres:5432/media_engine?schema=public
       REDIS_URL: redis://redis:6379
+      STORAGE_DIR: /app/storage
+      WEB_INTERNAL_URL: http://web:3000
     ports:
       - '4000:4000'
     volumes:
@@ -62,6 +65,8 @@ services:
     environment:
       DATABASE_URL: postgresql://media:media@postgres:5432/media_engine?schema=public
       REDIS_URL: redis://redis:6379
+      STORAGE_DIR: /app/storage
+      HOME: /tmp
     volumes:
       - storage:/app/storage
     read_only: true
@@ -76,6 +81,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      api:
+        condition: service_healthy
 
   web:
     build:
@@ -88,7 +95,8 @@ services:
     ports:
       - '3000:3000'
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:

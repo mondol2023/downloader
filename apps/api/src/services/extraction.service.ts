@@ -35,6 +35,7 @@ import { PLATFORM_IDS } from '../features/restrictions/policy.schema.js';
 import { extractWithRegionalFallback } from '../features/regions/regional-extract.js';
 import type { RegionCode } from '../features/regions/region.js';
 import { extractViaRegionalQueue } from '../queue/regional-queue.js';
+import { assertHostResolvesPublic } from '../lib/dns-guard.js';
 import { normaliseSourceUrl, platformFromHost, type NormalisedSource } from '../lib/source-url.js';
 
 /**
@@ -334,6 +335,8 @@ async function runExtraction(
   // Defence in depth: normaliseSourceUrl already rejected anything odd, but the
   // value is about to become argv, so re-assert it cannot be read as a flag.
   assertNotFlag(source.canonical, 'URL');
+  // Resolve before yt-dlp does: a public-looking name must not point at an internal address.
+  await assertHostResolvesPublic(source.host);
 
   const args = [
     '--dump-single-json',

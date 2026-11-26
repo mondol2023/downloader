@@ -82,6 +82,14 @@ describe('sanitize: images', () => {
     expect(out).not.toContain('evil.com');
   });
 
+  it.each(['%2e%2e/%2e%2e/api/v1/admin/x', '.%2E/secret', '%2e./secret', '..%2fsecret', 'a%5c..%5cb', 'a/./b/../c', 'a\\b'])(
+    'drops asset-origin images whose path can climb out of the folder (%s)',
+    (tail) => {
+      const out = clean(`<img src="${ORIGIN}/${tail}" alt="x">`);
+      expect(out).not.toContain('src=');
+    },
+  );
+
   it('drops every image when no asset origin is configured', () => {
     expect(sanitize('<img src="https://cdn.example.com/cms/a.webp">', { assetOrigin: '' })).toBe('');
   });

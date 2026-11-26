@@ -943,7 +943,7 @@ A repeatable BullMQ job publishes `SCHEDULED` pages once `publishAt <= now()`.
   - `apps/web/Dockerfile`: Next `output: 'standalone'`.
   - Verify with `docker compose up --build`, which should boot all services. Docker has to be installed on the machine first, or this runs in CI only.
 - [ ] **10.3 Security:**
-  - **Review gate** `[agent · opus · high]`: run the `security-review` skill, focusing on `/admin/*` authorisation and CMS sanitisation.
+  - **Review gate** `[agent · opus · medium]`: run the `security-review` skill, focusing on `/admin/*` authorisation and CMS sanitisation.
   - Confirm SSRF guards (`isPrivateHostname`) cover IPv6 and DNS-rebinding by resolving the host before calling yt-dlp.
   - Confirm rate limits cover `/media/extract`.
   - Confirm secrets come from env only.

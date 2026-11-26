@@ -1,4 +1,4 @@
-import { Extension, type AnyExtension } from '@tiptap/core';
+import { Extension, Node, mergeAttributes, type AnyExtension } from '@tiptap/core';
 import Color from '@tiptap/extension-color';
 import FontFamily from '@tiptap/extension-font-family';
 import Highlight from '@tiptap/extension-highlight';
@@ -131,6 +131,61 @@ export const Indent = Extension.create({
   },
 });
 
+export const IMAGE_WIDTHS = [25, 50, 75, 100] as const;
+
+/** Image with a display width (25/50/75/100 %) stored as a `cms-img-N` class; the caption is the `title`. */
+export const CmsImage = Image.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      width: {
+        default: 100,
+        parseHTML: (el) => {
+          const m = /(?:^|\s)cms-img-(25|50|75|100)(?:\s|$)/.exec(el.getAttribute('class') ?? '');
+          return m ? Number(m[1]) : 100;
+        },
+        renderHTML: (attrs) => ({ class: `cms-img-${IMAGE_WIDTHS.includes(attrs.width) ? attrs.width : 100}` }),
+      },
+    };
+  },
+});
+
+declare module '@tiptap/core' {
+  interface Commands<ReturnType> {
+    vimeo: { setVimeo: (options: { id: string }) => ReturnType };
+  }
+}
+
+/** Vimeo embed. Only a numeric id is stored; the iframe URL is rebuilt on render. */
+export const Vimeo = Node.create({
+  name: 'vimeo',
+  group: 'block',
+  atom: true,
+  draggable: true,
+  addAttributes() {
+    return {
+      id: {
+        default: null,
+        parseHTML: (el) => /\/video\/(\d{1,20})(?:[/?#]|$)/.exec(el.querySelector('iframe')?.getAttribute('src') ?? '')?.[1] ?? null,
+      },
+    };
+  },
+  parseHTML() {
+    return [{ tag: 'div[data-vimeo-video]' }];
+  },
+  renderHTML({ node, HTMLAttributes }) {
+    const id = String(node.attrs.id ?? '').replace(/\D/g, '');
+    return [
+      'div',
+      mergeAttributes({ 'data-vimeo-video': '' }, { class: HTMLAttributes.class }),
+      ['iframe', { src: `https://player.vimeo.com/video/${id}`, width: '640', height: '360', allowfullscreen: 'true', frameborder: '0' }],
+    ];
+  },
+  addCommands() {
+    return { setVimeo: (options) => ({ commands }) => commands.insertContent({ type: this.name, attrs: options }) };
+  },
+});
+
 /** The ONE extension list: the editor (web) adds editor-only extras on top; the renderer (api) uses it as is. */
 export const extensions: AnyExtension[] = [
   StarterKit,
@@ -146,7 +201,7 @@ export const extensions: AnyExtension[] = [
   Superscript,
   TextAlign.configure({ types: ['heading', 'paragraph'] }),
   Link.configure({ openOnClick: false, autolink: false }),
-  Image,
+  CmsImage,
   Table,
   TableRow,
   TableHeader,
@@ -154,4 +209,5 @@ export const extensions: AnyExtension[] = [
   TaskList,
   TaskItem,
   Youtube.configure({ nocookie: true }),
+  Vimeo,
 ];

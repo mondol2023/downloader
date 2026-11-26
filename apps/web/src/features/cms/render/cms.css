@@ -1,0 +1,32 @@
+/* Public CMS content. Styles every element the sanitiser allows, in the design system's tokens. */
+.cms-content { max-width: 68ch; font-size: 1.0625rem; line-height: 1.7; color: var(--text); overflow-wrap: anywhere; }
+.cms-content > * + * { margin-top: 1em; }
+.cms-content h1, .cms-content h2, .cms-content h3, .cms-content h4, .cms-content h5, .cms-content h6 {
+  font-family: var(--font-fraunces), Georgia, serif; line-height: 1.2; font-weight: 600; margin-top: 1.8em;
+}
+.cms-content h1 { font-size: 2.25rem; } .cms-content h2 { font-size: 1.75rem; } .cms-content h3 { font-size: 1.4rem; }
+.cms-content h4 { font-size: 1.15rem; } .cms-content h5, .cms-content h6 { font-size: 1rem; }
+.cms-content a { color: var(--signal); text-decoration: underline; text-underline-offset: 3px; }
+.cms-content mark { background: color-mix(in srgb, var(--signal) 35%, transparent); color: inherit; padding: 0 .15em; border-radius: 3px; }
+.cms-content sub, .cms-content sup { font-size: .75em; line-height: 0; }
+.cms-content ul, .cms-content ol { padding-left: 1.5em; }
+.cms-content ul { list-style: disc; } .cms-content ol { list-style: decimal; }
+.cms-content li + li { margin-top: .35em; }
+.cms-content ul[data-type="taskList"] { list-style: none; padding-left: 0; }
+.cms-content ul[data-type="taskList"] li { display: flex; gap: .6em; align-items: flex-start; }
+.cms-content blockquote { border-left: 3px solid var(--signal); padding-left: 1em; color: var(--text-muted); font-style: italic; }
+.cms-content hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
+.cms-content code { font-family: var(--font-geist-mono), monospace; font-size: .9em; background: var(--surface-2); padding: .15em .35em; border-radius: 5px; }
+.cms-content pre { background: var(--surface-1); border: 1px solid var(--line); border-radius: 10px; padding: 1em; overflow-x: auto; line-height: 1.5; }
+.cms-content pre code { background: none; padding: 0; font-size: .875rem; }
+.cms-content img { max-width: 100%; height: auto; border-radius: 10px; }
+.cms-content figure { margin-inline: 0; }
+.cms-content figcaption { font-size: .875rem; color: var(--text-muted); margin-top: .5em; }
+.cms-content table { width: 100%; border-collapse: collapse; display: block; overflow-x: auto; font-size: .95rem; }
+.cms-content th, .cms-content td { border: 1px solid var(--line); padding: .5em .75em; text-align: left; vertical-align: top; }
+.cms-content th { background: var(--surface-2); font-weight: 600; }
+.cms-content iframe { width: 100%; aspect-ratio: 16 / 9; height: auto; border: 0; border-radius: 10px; }
+.cms-content .text-align-left { text-align: left; }
+.cms-content .text-align-center { text-align: center; }
+.cms-content .text-align-right { text-align: right; }
+.cms-content .text-align-justify { text-align: justify; }

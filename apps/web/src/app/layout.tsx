@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Fraunces, Geist, Geist_Mono } from "next/font/google";
 import { SiteHeader } from "@/components/SiteHeader";
+import { SiteContent } from "@/features/cms/render/SiteContent";
 import { JobToastTray } from "@/features/jobs";
 import { Providers } from "./providers";
 import "./globals.css";
@@ -19,8 +20,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">
         <Providers>
-          <SiteHeader />
-          {children}
+          <SiteContent header={<SiteHeader />}>{children}</SiteContent>
           <JobToastTray />
         </Providers>
       </body>

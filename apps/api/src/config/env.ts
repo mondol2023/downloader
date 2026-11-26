@@ -52,6 +52,9 @@ const schema = z.object({
   STREAM_GRANT_TTL: z.coerce.number().int().positive().default(21_600),
   /** Where CMS images are served from; the sanitiser keeps `<img>` only under this origin. Defaults to the API's own asset route. */
   CMS_ASSET_ORIGIN: z.string().url().optional(),
+  /** Where the API reaches the web app to invalidate cached CMS pages. Both must be set, else the web app relies on its 5-minute ISR window. */
+  WEB_INTERNAL_URL: z.string().url().optional(),
+  REVALIDATE_SECRET: z.string().min(16, 'REVALIDATE_SECRET must be at least 16 chars').optional(),
   CMS_MAX_UPLOAD_MB: z.coerce.number().positive().default(5),
   /** Empty = allow any public host (needed for 1000+ extractors). */
   ALLOWED_STREAM_HOSTS: csv,

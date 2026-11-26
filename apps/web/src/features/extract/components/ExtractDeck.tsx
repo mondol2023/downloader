@@ -1,7 +1,7 @@
 "use client";
 import { AnimatePresence, motion, useAnimationControls, useReducedMotion } from "motion/react";
 import { useEffect, useId, useRef, type FormEvent } from "react";
-import { INELIGIBLE_COPY } from "@media/shared";
+import { useRefusalCopy } from "@/features/cms/render/overrides";
 import { Badge, Button, Skeleton } from "@/components/ui";
 import { ApiError, isDegraded } from "@/lib/api";
 import { duration, ease, spring } from "@/design/motion";
@@ -41,6 +41,7 @@ export function ExtractDeckView({
   const seated = status === "typing" && !!url;
   const busy = status === "extracting";
   const reduce = useReducedMotion();
+  const refusalCopy = useRefusalCopy();
   const deck = useAnimationControls();
   const wasSeated = useRef(false);
   // The signature "seat": once per paste, on the false -> true edge only (not per keystroke).
@@ -153,8 +154,8 @@ export function ExtractDeckView({
 
       {refusal && (
         <div role="alert" data-testid="refusal" data-code={refusal} className="rounded-deck border border-danger/40 bg-danger/10 p-5">
-          <h2 className="font-display text-xl">{INELIGIBLE_COPY[refusal].title}</h2>
-          <p className="mt-1 text-sm text-muted">{INELIGIBLE_COPY[refusal].body}</p>
+          <h2 className="font-display text-xl">{refusalCopy(refusal).title}</h2>
+          <p className="mt-1 text-sm text-muted">{refusalCopy(refusal).body}</p>
           <p className="mt-3 text-sm">{NEXT_STEP[refusal]}</p>
         </div>
       )}

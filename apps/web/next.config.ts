@@ -9,7 +9,10 @@ loadEnvConfig(path.resolve(process.cwd(), "../.."), process.env.NODE_ENV !== "pr
 const API_INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://localhost:4000";
 
 const nextConfig: NextConfig = {
-  transpilePackages: ["@media/shared"],
+  // Self-contained server for the Docker image; traced from the repo root so workspace packages are included.
+  output: "standalone",
+  outputFileTracingRoot: path.resolve(process.cwd(), "../.."),
+  transpilePackages: ["@media/shared", "@media/rich-text"],
   // Same-origin proxy so the refresh cookie (path /api/v1/auth) needs no CORS.
   async rewrites() {
     return [

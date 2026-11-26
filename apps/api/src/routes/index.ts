@@ -7,6 +7,8 @@ import mediaRoutes from './media.routes.js';
 import adminRouter from '../features/admin/admin.router.js';
 import cmsPublic from '../features/cms/cms.public.js';
 import policyRoutes from '../features/restrictions/policy.routes.js';
+import takedownPublic from '../features/eligibility/takedown.public.js';
+import { rateLimit } from '../middleware/rate-limit.js';
 
 /**
  * Versioned API surface.
@@ -41,6 +43,19 @@ router.use('/media', mediaRoutes);
 router.use('/policy', policyRoutes);
 // Published CMS content; pages and blocks need Postgres, uploaded images are plain files.
 router.use('/cms', cmsPublic);
+// Public DMCA intake: creates PENDING rows only, rate limited per IP.
+router.use(
+  '/takedowns',
+  requireDatabase,
+  rateLimit({
+    bucket: 'takedown',
+    windowSeconds: 3600,
+    max: 5,
+    keyFn: (req) => `ip:${req.identity.ipHash}`,
+    message: 'Too many takedown requests from this address; try again later',
+  }),
+  takedownPublic,
+);
 router.use('/jobs', writesNeedDatabase, jobsRoutes);
 router.use('/billing', requireDatabase, billingRoutes);
 // Role is checked per-router (EDITOR for /admin/cms, ADMIN for the rest) against the database.

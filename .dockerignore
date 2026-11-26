@@ -1,0 +1,13 @@
+**/node_modules
+**/dist
+**/.next
+**/*.tsbuildinfo
+**/test-results
+**/storage
+.git
+.github
+.superpowers
+docs
+.env
+.env.*
+!.env.example

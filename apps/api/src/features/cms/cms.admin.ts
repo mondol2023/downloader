@@ -6,6 +6,7 @@ import { asyncHandler } from '../../middleware/error-handler.js';
 import { setAudit } from '../admin/audit.js';
 import { actorId, pageArgs, pageQuery, toPage } from '../admin/http.js';
 import { assetOrigin, docSchema, renderDoc } from './cms.render.js';
+import { notifyWeb } from './cms.revalidate.js';
 import { parseUpload, storeImage } from './cms.upload.js';
 
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -137,6 +138,7 @@ router.patch(
       before: { slug: out.before.slug, title: out.before.title, version: out.before.version },
       after: { slug: out.page.slug, title: out.page.title, version: out.page.version },
     });
+    await Promise.all([...new Set([out.before.slug, out.page.slug])].map((slug) => notifyWeb({ slug })));
     res.json({ data: out.page });
   }),
 );
@@ -150,6 +152,7 @@ router.delete(
     if (!before) throw AppError.notFound('Page not found');
     const page = await prisma.cmsPage.update({ where: { id }, data: { status: 'ARCHIVED', publishAt: null } });
     setAudit(res, { action: 'cms.page.archive', target: `cms-page:${id}`, before: { status: before.status }, after: { status: 'ARCHIVED' } });
+    await notifyWeb({ slug: page.slug });
     res.json({ data: page });
   }),
 );
@@ -167,6 +170,7 @@ router.post(
     const id = idOf(req.params);
     const { before, page } = await transition(id, { status: 'PUBLISHED', publishedAt: new Date(), publishAt: null });
     setAudit(res, { action: 'cms.page.publish', target: `cms-page:${id}`, before: { status: before.status }, after: { status: page.status } });
+    await notifyWeb({ slug: page.slug });
     res.json({ data: page });
   }),
 );
@@ -177,6 +181,7 @@ router.post(
     const id = idOf(req.params);
     const { before, page } = await transition(id, { status: 'DRAFT', publishAt: null });
     setAudit(res, { action: 'cms.page.unpublish', target: `cms-page:${id}`, before: { status: before.status }, after: { status: page.status } });
+    await notifyWeb({ slug: page.slug });
     res.json({ data: page });
   }),
 );
@@ -234,6 +239,7 @@ router.post(
       return updated;
     });
     setAudit(res, { action: 'cms.page.restore', target: `cms-page:${id}`, after: { restoredFrom: version, version: page.version } });
+    await notifyWeb({ slug: page.slug });
     res.json({ data: page });
   }),
 );
@@ -260,6 +266,7 @@ router.put(
       update: { contentJson: contentJson as never, contentHtml, updatedById: by },
     });
     setAudit(res, { action: 'cms.block.put', target: `cms-block:${key}` });
+    await notifyWeb({ blockKey: key });
     res.json({ data: row });
   }),
 );

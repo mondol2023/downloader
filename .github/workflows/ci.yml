@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: media
+          POSTGRES_PASSWORD: media
+          POSTGRES_DB: media_engine
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U media -d media_engine"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://media:media@localhost:5432/media_engine?schema=public
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Workspace packages resolve through their dist/ output, so build them before anything type-checks.
+      - name: Build shared packages
+        run: |
+          npm run build -w @media/shared
+          npm run build -w @media/rich-text
+
+      - run: npx prisma generate --schema apps/api/prisma/schema.prisma
+      - run: npm run typecheck
+      - run: npm test --workspaces --if-present
+
+      - name: Apply migrations
+        run: npm run db:deploy -w @media/api
+
+      # Playwright specs mock the API with page.route (and a stub API for CMS publishing), so only the web app runs.
+      # The repo-root .env supplies non-secret defaults (signing secret etc.) for the specs that need them.
+      - name: Prepare e2e env
+        run: cp .env.example .env
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      - name: Playwright
+        run: npm run e2e -w @media/web
+        env:
+          CI: 'true'
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-traces
+          path: apps/web/test-results
+          retention-days: 7

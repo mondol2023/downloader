@@ -160,30 +160,83 @@ export function assertHostAllowed(host: string, allowlist: readonly string[]): v
   if (!ok) throw new StreamGrantError(`Host ${host} is not allowlisted`, 'HOST_NOT_ALLOWED');
 }
 
-/** Blocks loopback, link-local, RFC1918 and unique-local literals. */
+/** Blocks loopback, link-local, RFC1918, unique-local, multicast and reserved literals, incl. IPv4-in-IPv6 forms. */
 export function isPrivateHostname(hostname: string): boolean {
-  const host = hostname.replace(/^\[|\]$/g, '');
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
 
   if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal')) {
     return true;
   }
 
-  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-  if (ipv4) {
-    const [a, b] = [Number(ipv4[1]), Number(ipv4[2])];
-    if (a === 10 || a === 127 || a === 0) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 169 && b === 254) return true; // cloud metadata
-    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
-    return false;
-  }
+  const v4 = parseIpv4(host);
+  if (v4) return isPrivateIpv4(v4);
 
   if (host.includes(':')) {
-    const lower = host.toLowerCase();
-    if (lower === '::1' || lower === '::') return true;
-    if (lower.startsWith('fe80') || lower.startsWith('fc') || lower.startsWith('fd')) return true;
+    const bytes = parseIpv6(host);
+    // Unparseable "IPv6" is refused rather than guessed at.
+    if (!bytes) return true;
+    return isPrivateIpv6(bytes);
   }
 
+  return false;
+}
+
+function parseIpv4(host: string): [number, number, number, number] | null {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return null;
+  const parts = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])] as [number, number, number, number];
+  return parts.every((n) => n <= 255) ? parts : null;
+}
+
+function isPrivateIpv4([a, b, c]: [number, number, number, number]): boolean {
+  if (a === 0 || a === 10 || a === 127) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 169 && b === 254) return true; // link-local / cloud metadata
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+  if (a === 192 && b === 0 && c === 0) return true; // IETF protocol assignments
+  if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking
+  if (a >= 224) return true; // multicast, reserved, broadcast
+  return false;
+}
+
+/** Expands any textual IPv6 (including `::` and a trailing dotted quad) to 16 bytes. */
+function parseIpv6(host: string): number[] | null {
+  const zone = host.indexOf('%');
+  let text = zone === -1 ? host : host.slice(0, zone);
+  const tail = /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(text);
+  if (tail) {
+    const q = parseIpv4(tail[1]!);
+    if (!q) return null;
+    text = text.slice(0, -tail[1]!.length) + ((q[0] << 8) | q[1]).toString(16) + ':' + ((q[2] << 8) | q[3]).toString(16);
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const rest = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - head.length - rest.length;
+  if (halves.length === 2 ? missing < 1 : missing !== 0) return null;
+  const groups = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill('0'), ...rest];
+  const bytes: number[] = [];
+  for (const g of groups) {
+    if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+    const n = parseInt(g, 16);
+    bytes.push(n >> 8, n & 0xff);
+  }
+  return bytes.length === 16 ? bytes : null;
+}
+
+function isPrivateIpv6(b: number[]): boolean {
+  const allZeroUntil = (n: number) => b.slice(0, n).every((x) => x === 0);
+  if (allZeroUntil(15) && (b[15] === 0 || b[15] === 1)) return true; // :: and ::1
+  if (allZeroUntil(10) && b[10] === 0xff && b[11] === 0xff) return isPrivateIpv4([b[12]!, b[13]!, b[14]!, b[15]!]); // ::ffff:a.b.c.d
+  if (allZeroUntil(12)) return isPrivateIpv4([b[12]!, b[13]!, b[14]!, b[15]!]); // deprecated IPv4-compatible
+  // NAT64 well-known prefix 64:ff9b::/96 embeds an IPv4 address.
+  if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b.slice(4, 12).every((x) => x === 0)) {
+    return isPrivateIpv4([b[12]!, b[13]!, b[14]!, b[15]!]);
+  }
+  if (b[0] === 0xfe && (b[1]! & 0xc0) === 0x80) return true; // fe80::/10 link-local
+  if ((b[0]! & 0xfe) === 0xfc) return true; // fc00::/7 unique-local
+  if (b[0] === 0xff) return true; // multicast
   return false;
 }

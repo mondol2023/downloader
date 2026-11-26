@@ -64,10 +64,10 @@ export function sanitize(html: string, options: SanitizeOptions = {}): string {
       input: ['type', 'checked', 'disabled'],
       ul: ['data-type'],
       li: ['data-type', 'data-checked'],
-      div: ['data-youtube-video'],
+      div: ['data-youtube-video', 'data-vimeo-video'],
     },
     allowedStyles: { '*': ALLOWED_STYLES },
-    allowedClasses: { '*': ['text-align-*', 'cms-*'] },
+    allowedClasses: { '*': ['text-align-*', 'cms-*', 'language-*'] },
     allowedSchemes: ['https', 'http', 'mailto'],
     allowedSchemesByTag: { img: ['https', 'http'], iframe: ['https'] },
     allowProtocolRelative: false,
@@ -91,7 +91,13 @@ export function sanitize(html: string, options: SanitizeOptions = {}): string {
       },
       img: (tagName, attribs) => {
         const src = (attribs.src ?? '').trim();
-        const ok = origin !== '' && src.startsWith(`${origin}/`) && !src.includes('..');
+        // Browsers read !/\|%2e as '.', so a literal '..' check is not enough: refuse dot segments in any encoding,
+        // backslashes, and encoded separators in the path.
+        const tail = src.slice(origin.length + 1);
+        const ok =
+          origin !== '' &&
+          src.startsWith(`${origin}/`) &&
+          !/\\|%2e|%2f|%5c|(?:^|\/)\.{1,2}(?:\/|$)/i.test(tail);
         const { src: _src, ...rest } = attribs;
         return { tagName, attribs: ok ? { ...rest, src } : rest };
       },
