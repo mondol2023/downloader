@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { isPrivateHostname } from '@media/shared';
 import { AppError } from './errors.js';
+import { isBlockedHost } from '../features/eligibility/blocked-hosts.js';
+import { refusalError } from '../features/eligibility/refusal.js';
+import { assertPlatformAllowed } from '../features/restrictions/enforce.js';
+import { getPolicy } from '../features/restrictions/policy.current.js';
 
 /**
  * Normalises and vets a user-supplied media URL before it is ever handed to
@@ -47,7 +51,10 @@ export interface NormalisedSource {
   mediaId: string;
 }
 
-export function normaliseSourceUrl(input: string): NormalisedSource {
+export function normaliseSourceUrl(
+  input: string,
+  options: { skipPolicy?: boolean } = {},
+): NormalisedSource {
   const trimmed = input.trim();
   if (!trimmed) throw AppError.badRequest('A media URL is required');
   if (trimmed.length > 2048) throw AppError.badRequest('That URL is too long');
@@ -74,6 +81,12 @@ export function normaliseSourceUrl(input: string): NormalisedSource {
   if (isPrivateHostname(host)) {
     throw AppError.badRequest('That host is not reachable from this service');
   }
+  const platform = platformFromHost(host);
+  // Admin tooling (takedowns, policy preview) needs the media id of a URL the live policy refuses.
+  if (!options.skipPolicy) {
+    if (isBlockedHost(host, getPolicy())) throw refusalError('SOURCE_BLOCKED_DOMAIN');
+    assertPlatformAllowed(platform, 'extract');
+  }
 
   // Rebuild rather than mutate, so nothing exotic survives.
   const canonicalUrl = new URL(`${parsed.protocol}//${host}${parsed.pathname}`);
@@ -97,7 +110,7 @@ export function normaliseSourceUrl(input: string): NormalisedSource {
     original: trimmed,
     canonical,
     host,
-    platform: platformFromHost(host),
+    platform,
     mediaId: createHash('sha256').update(canonical).digest('hex').slice(0, 24),
   };
 }

@@ -18,6 +18,12 @@ enum Tier {
   PRO
 }
 
+enum Role {
+  USER
+  EDITOR
+  ADMIN
+}
+
 enum SubscriptionStatus {
   ACTIVE
   TRIALING
@@ -55,6 +61,8 @@ model User {
   // Denormalised effective tier. Written only by the subscription reconciler
   // so a single query answers "what may this user do".
   tier           Tier     @default(FREE)
+  // Read from the database on every admin request (never from the JWT) so a demotion is immediate.
+  role           Role     @default(USER)
   stripeCustomerId String? @unique
   // Soft ban / abuse control.
   disabledAt     DateTime?
@@ -69,6 +77,7 @@ model User {
   downloads      DownloadLog[]
 
   @@index([tier])
+  @@index([role])
   @@index([createdAt])
 }
 
@@ -122,6 +131,8 @@ model Job {
   mediaId       String
   platform      String
   mediaTitle    String
+  /// Region the media was extracted in; signed URLs are region-bound, so the download must run there.
+  region        String?
   formatId      String
   formatLabel   String
   audioFormat   String?
@@ -212,8 +223,14 @@ model AuditEvent {
   ip        String?
   userAgent String?
   metadata  Json?
+  /// Admin console: who acted, on what, and the state before/after the change.
+  actorId   String?
+  target    String?
+  before    Json?
+  after     Json?
   createdAt DateTime @default(now())
 
+  @@index([actorId, createdAt])
   @@index([userId, createdAt])
   @@index([action, createdAt])
 }
@@ -226,4 +243,103 @@ model ProcessedWebhook {
   processedAt DateTime @default(now())
 
   @@index([processedAt])
+}
+
+// One row per published restriction policy. Exactly one row is active; its `overrides` are
+// layered over the code defaults (features/restrictions/restrictions.config.ts) at runtime.
+model PolicyVersion {
+  id          String   @id @default(cuid())
+  version     Int      @unique
+  overrides   Json
+  note        String
+  active      Boolean  @default(false)
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@index([active])
+}
+
+enum TakedownStatus {
+  PENDING
+  ACTIVE
+  REJECTED
+}
+
+// A source removed from the service on request. `mediaId` is the same hash extraction keys on,
+// so an ACTIVE row refuses every URL that normalises to it (SOURCE_TAKEN_DOWN).
+model Takedown {
+  id             String         @id @default(cuid())
+  mediaId        String         @unique
+  sourceUrl      String
+  reason         String
+  status         TakedownStatus @default(PENDING)
+  requesterEmail String?
+  createdAt      DateTime       @default(now())
+  decidedById    String?
+
+  @@index([status, createdAt])
+}
+
+// ── CMS (Phase 9) ────────────────────────────────────────────────────────────────────────────
+// contentJson (Tiptap) is the source of truth; contentHtml is rendered + sanitised at save time.
+
+enum CmsStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+model CmsPage {
+  id             String        @id @default(cuid())
+  slug           String        @unique
+  title          String
+  status         CmsStatus     @default(DRAFT)
+  contentJson    Json
+  contentHtml    String
+  seoTitle       String?
+  seoDescription String?
+  ogImageId      String?
+  publishAt      DateTime?
+  publishedAt    DateTime?
+  // Optimistic-concurrency token: PATCH must send the version it read.
+  version        Int           @default(1)
+  updatedById    String
+  updatedAt      DateTime      @updatedAt
+  createdAt      DateTime      @default(now())
+  revisions      CmsRevision[]
+
+  @@index([status, publishAt])
+}
+
+model CmsRevision {
+  id          String   @id @default(cuid())
+  pageId      String
+  page        CmsPage  @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  version     Int
+  title       String
+  contentJson Json
+  authorId    String
+  createdAt   DateTime @default(now())
+
+  @@unique([pageId, version])
+}
+
+model CmsBlock {
+  key         String   @id
+  contentJson Json
+  contentHtml String
+  updatedById String
+  updatedAt   DateTime @updatedAt
+}
+
+model CmsAsset {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  mime      String
+  bytes     Int
+  width     Int?
+  height    Int?
+  alt       String
+  createdAt DateTime @default(now())
 }

@@ -1,0 +1,62 @@
+/* The editing surface always uses the light "paper" palette, even inside the dark admin,
+   so authors see the real page colours. Literal values on purpose: they must not follow the theme. */
+.cms-paper {
+  --paper: #fbf9f4;
+  --paper-ink: #1b1916;
+  --paper-muted: #5f594f;
+  --paper-line: #d6cfc2;
+  background: var(--paper);
+  color: var(--paper-ink);
+  color-scheme: light;
+}
+.cms-prose { line-height: 1.6; font-size: 1rem; overflow-wrap: anywhere; }
+.cms-prose > * + * { margin-top: 0.75em; }
+.cms-prose h1 { font-size: 2em; font-weight: 600; line-height: 1.2; }
+.cms-prose h2 { font-size: 1.6em; font-weight: 600; line-height: 1.25; }
+.cms-prose h3 { font-size: 1.3em; font-weight: 600; }
+.cms-prose h4 { font-size: 1.1em; font-weight: 600; }
+.cms-prose h5, .cms-prose h6 { font-size: 1em; font-weight: 600; }
+.cms-prose ul { list-style: disc; padding-left: 1.5em; }
+.cms-prose ol { list-style: decimal; padding-left: 1.5em; }
+.cms-prose ul[data-type="taskList"] { list-style: none; padding-left: 0.25em; }
+.cms-prose ul[data-type="taskList"] li { display: flex; gap: 0.5em; align-items: flex-start; }
+.cms-prose ul[data-type="taskList"] li > label { margin-top: 0.2em; }
+.cms-prose ul[data-type="taskList"] li > div { flex: 1; }
+.cms-prose blockquote { border-left: 3px solid var(--paper-line, #d6cfc2); padding-left: 1em; color: var(--paper-muted, #5f594f); }
+.cms-prose a { color: #8a5200; text-decoration: underline; }
+.cms-prose code { font-family: var(--font-geist-mono), monospace; font-size: 0.9em; background: #ece7dd; padding: 0.1em 0.3em; border-radius: 4px; }
+.cms-prose pre { background: #1b1916; color: #f2eee8; padding: 0.9em 1em; border-radius: 8px; overflow-x: auto; }
+.cms-prose pre code { background: none; padding: 0; color: inherit; }
+.cms-prose hr { border: 0; border-top: 1px solid var(--paper-line, #d6cfc2); margin: 1.5em 0; }
+.cms-prose mark { padding: 0 0.1em; border-radius: 2px; }
+.cms-prose img { height: auto; max-width: 100%; display: block; }
+.cms-prose img.cms-img-25 { width: 25%; }
+.cms-prose img.cms-img-50 { width: 50%; }
+.cms-prose img.cms-img-75 { width: 75%; }
+.cms-prose img.cms-img-100 { width: 100%; }
+.cms-prose img.ProseMirror-selectednode, .cms-prose [data-youtube-video].ProseMirror-selectednode, .cms-prose [data-vimeo-video].ProseMirror-selectednode { outline: 2px solid #b36b00; }
+.cms-prose table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.cms-prose th, .cms-prose td { border: 1px solid var(--paper-line, #d6cfc2); padding: 0.4em 0.6em; vertical-align: top; position: relative; }
+.cms-prose th { background: #ece7dd; text-align: left; }
+.cms-prose .selectedCell::after { content: ""; position: absolute; inset: 0; background: rgba(179, 107, 0, 0.18); pointer-events: none; }
+.cms-prose [data-youtube-video] iframe, .cms-prose [data-vimeo-video] iframe { width: 100%; aspect-ratio: 16 / 9; height: auto; border: 0; }
+.cms-prose .text-align-left { text-align: left; }
+.cms-prose .text-align-center { text-align: center; }
+.cms-prose .text-align-right { text-align: right; }
+.cms-prose .text-align-justify { text-align: justify; }
+.cms-prose .cms-indent-1 { margin-left: 2em; }
+.cms-prose .cms-indent-2 { margin-left: 4em; }
+.cms-prose .cms-indent-3 { margin-left: 6em; }
+.cms-prose .cms-indent-4 { margin-left: 8em; }
+.cms-prose .cms-indent-5 { margin-left: 10em; }
+.cms-prose .cms-indent-6 { margin-left: 12em; }
+.cms-prose .cms-indent-7 { margin-left: 14em; }
+.cms-prose .cms-indent-8 { margin-left: 16em; }
+.cms-prose .tiptap p.is-editor-empty:first-child::before { content: attr(data-placeholder); color: #8a8378; float: left; height: 0; pointer-events: none; }
+.cms-prose .tiptap { outline: none; min-height: var(--cms-editor-min, 18rem); }
+/* lowlight (highlight.js) token colours, on the dark code block */
+.cms-prose .hljs-comment, .cms-prose .hljs-quote { color: #8a8378; }
+.cms-prose .hljs-keyword, .cms-prose .hljs-selector-tag { color: #ffb224; }
+.cms-prose .hljs-string, .cms-prose .hljs-attr { color: #3dd68c; }
+.cms-prose .hljs-number, .cms-prose .hljs-literal { color: #ff9d8f; }
+.cms-prose .hljs-title, .cms-prose .hljs-function { color: #8ec5ff; }

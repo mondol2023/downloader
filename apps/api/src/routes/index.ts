@@ -1,8 +1,14 @@
-import { Router } from 'express';
+import { Router, type RequestHandler } from 'express';
+import { requireDatabase } from '../features/persistence/index.js';
 import authRoutes from './auth.routes.js';
 import billingRoutes from './billing.routes.js';
 import jobsRoutes from './jobs.routes.js';
 import mediaRoutes from './media.routes.js';
+import adminRouter from '../features/admin/admin.router.js';
+import cmsPublic from '../features/cms/cms.public.js';
+import policyRoutes from '../features/restrictions/policy.routes.js';
+import takedownPublic from '../features/eligibility/takedown.public.js';
+import { rateLimit } from '../middleware/rate-limit.js';
 
 /**
  * Versioned API surface.
@@ -16,10 +22,43 @@ import mediaRoutes from './media.routes.js';
  */
 const router = Router();
 
+/**
+ * Degraded mode: auth, billing and anything that creates or mutates a job live
+ * only in Postgres, so they 503 immediately while it is down. `/media/*` (guest
+ * extraction, Redis-cached) and the read-only job routes (artifact download,
+ * status) deliberately stay open.
+ */
+const writesNeedDatabase: RequestHandler = (req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+    next();
+    return;
+  }
+  requireDatabase(req, res, next);
+};
+
 // Path must stay `/auth` — the refresh cookie is scoped to `/api/v1/auth`.
-router.use('/auth', authRoutes);
+router.use('/auth', requireDatabase, authRoutes);
 router.use('/media', mediaRoutes);
-router.use('/jobs', jobsRoutes);
-router.use('/billing', billingRoutes);
+// Public, read-only and served from memory, so it stays up while Postgres is down.
+router.use('/policy', policyRoutes);
+// Published CMS content; pages and blocks need Postgres, uploaded images are plain files.
+router.use('/cms', cmsPublic);
+// Public DMCA intake: creates PENDING rows only, rate limited per IP.
+router.use(
+  '/takedowns',
+  requireDatabase,
+  rateLimit({
+    bucket: 'takedown',
+    windowSeconds: 3600,
+    max: 5,
+    keyFn: (req) => `ip:${req.identity.ipHash}`,
+    message: 'Too many takedown requests from this address; try again later',
+  }),
+  takedownPublic,
+);
+router.use('/jobs', writesNeedDatabase, jobsRoutes);
+router.use('/billing', requireDatabase, billingRoutes);
+// Role is checked per-router (EDITOR for /admin/cms, ADMIN for the rest) against the database.
+router.use('/admin', adminRouter);
 
 export default router;

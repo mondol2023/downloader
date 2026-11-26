@@ -19,6 +19,8 @@ declare global {
     interface Request {
       identity: RequestIdentity;
       requestId: string;
+      /** Set by `requireRole` after reading the role from the database. */
+      adminRole?: import('@prisma/client').Role;
     }
   }
 }

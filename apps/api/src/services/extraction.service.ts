@@ -3,6 +3,7 @@ import type {
   DeliveryProtocol,
   ExtractionResult,
   GatedMediaFormat,
+  IneligibleCode,
   MediaFormat,
   MediaKind,
   MediaMetadata,
@@ -11,13 +12,32 @@ import type {
   Thumbnail,
   Tier,
 } from '@media/shared';
-import { evaluateFormatAccess, minimumTierFor, policyFor } from '@media/shared';
+import { INELIGIBLE_CODES } from '@media/shared';
 import { env } from '../config/env.js';
 import { keys, redis } from '../lib/redis.js';
+import { getDbHealth } from '../features/persistence/index.js';
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { CommandError, assertNotFlag, runCommand } from '../lib/exec.js';
+import { evaluateEligibility, refusalError } from '../features/eligibility/index.js';
+import { assertNotTakenDown } from '../features/eligibility/takedown.js';
+import { bumpStat } from '../features/admin/stats-counters.js';
+import {
+  assertDurationAllowed,
+  assertExtractionOpen,
+  assertRulesAllowMedia,
+  assertRulesAllowSource,
+  evaluateAccess,
+  requiredTierFor,
+  tierPolicyFor,
+} from '../features/restrictions/enforce.js';
+import { getPolicy } from '../features/restrictions/policy.current.js';
+import { PLATFORM_IDS } from '../features/restrictions/policy.schema.js';
+import { extractWithRegionalFallback } from '../features/regions/regional-extract.js';
+import type { RegionCode } from '../features/regions/region.js';
+import { extractViaRegionalQueue } from '../queue/regional-queue.js';
+import { assertHostResolvesPublic } from '../lib/dns-guard.js';
 import { normaliseSourceUrl, platformFromHost, type NormalisedSource } from '../lib/source-url.js';
 
 /**
@@ -56,6 +76,7 @@ interface YtDlpFormat {
   filesize?: number | null;
   filesize_approx?: number | null;
   language?: string | null;
+  has_drm?: boolean | string | null;
 }
 
 interface YtDlpSubtitle {
@@ -67,6 +88,7 @@ interface YtDlpSubtitle {
 interface YtDlpPayload {
   id?: string;
   _type?: string;
+  availability?: string | null;
   title?: string;
   description?: string | null;
   webpage_url?: string;
@@ -112,19 +134,69 @@ export interface ExtractionRecord {
   subtitleSources: Record<string, SubtitleSource>;
   fetchedAt: string;
   expiresAt: string;
+  /** Set only when a regional worker produced this record. */
+  region?: string;
 }
 
 const LIVE_TTL_SECONDS = 30;
 const DEFAULT_TTL_SECONDS = 6 * 60 * 60;
 const LOCK_TTL_MS = 90_000;
 
-export async function extractMedia(
+/** `tier` is required so a caller cannot skip the tier-scoped admin rules. */
+export interface ExtractOptions {
+  signal?: AbortSignal;
+  force?: boolean;
+  userRegion?: RegionCode | null;
+  tier: Tier;
+}
+
+/**
+ * Resolves a URL to a record. The runtime policy is applied on every call, cache hit or not:
+ * the platform switch inside `normaliseSourceUrl`, the extraction pause, and the duration cap, so
+ * a limit an admin tightens takes effect for records that were cached under the old one.
+ */
+export async function extractMedia(rawUrl: string, options: ExtractOptions): Promise<ExtractionRecord> {
+  assertExtractionOpen();
+  try {
+    const record = await resolveRecord(rawUrl, options);
+    assertDurationAllowed(record.media.durationSeconds);
+    assertRulesAllowMedia(record.media, options.tier);
+    bumpStat('extracts', record.media.platform);
+    return record;
+  } catch (err) {
+    if (err instanceof AppError && isIneligibleCode(err.code)) bumpStat('refusals', err.code);
+    throw err;
+  }
+}
+
+/**
+ * Lock-free, cache-free extraction for the regional worker. The API already holds the extraction
+ * lock for this media while it waits on the regional job, so going through `extractMedia` here
+ * would wait on a lock held by the very request that is waiting on us. The API caches the result.
+ */
+export async function extractMediaDirect(
   rawUrl: string,
-  options: { signal?: AbortSignal; force?: boolean } = {},
+  options: { signal?: AbortSignal } = {},
 ): Promise<ExtractionRecord> {
+  assertExtractionOpen();
   const source = normaliseSourceUrl(rawUrl);
+  await assertNotTakenDown(source.mediaId);
+  const record = await runExtraction(source, options.signal);
+  assertDurationAllowed(record.media.durationSeconds);
+  return record;
+}
+
+async function resolveRecord(rawUrl: string, options: ExtractOptions): Promise<ExtractionRecord> {
+  const source = normaliseSourceUrl(rawUrl);
+  // Before any cache: a takedown must beat a record that was cached before it was decided.
+  await assertNotTakenDown(source.mediaId);
+  // Also before any cache and outside the refusal cache below: a rule edit applies at once, and a
+  // rule refusal never outlives the rule.
+  assertRulesAllowSource(source, options.tier);
 
   if (!options.force) {
+    const refused = await readRefusal(source.mediaId);
+    if (refused) throw refused;
     const cached = await readCache(source.mediaId);
     if (cached) return cached;
   }
@@ -142,14 +214,50 @@ export async function extractMedia(
   }
 
   try {
-    const record = await runExtraction(source, options.signal);
+    const record = await extractWithRegionalFallback(source, options.userRegion ?? null, {
+      cfg: env,
+      local: () => runExtraction(source, options.signal),
+      regional: extractViaRegionalQueue,
+    });
     await writeCache(record);
     return record;
+  } catch (err) {
+    // A geo-block depends on where the request ran, not on the media: caching it would also refuse
+    // users in a region where it plays.
+    if (err instanceof AppError && isIneligibleCode(err.code) && err.code !== 'SOURCE_GEOBLOCKED') {
+      await writeRefusal(source.mediaId, err.code);
+    }
+    throw err;
   } finally {
     // Only release a lock we still own.
     const current = await redis.get(lockKey).catch(() => null);
     if (current === lockToken) await redis.del(lockKey).catch(() => undefined);
   }
+}
+
+/** How long a refusal is remembered, so repeat pastes of the same link don't re-run yt-dlp. */
+const REFUSAL_TTL_SECONDS = 600;
+
+export function isIneligibleCode(code: string): code is IneligibleCode {
+  return (INELIGIBLE_CODES as readonly string[]).includes(code);
+}
+
+async function readRefusal(mediaId: string): Promise<AppError | null> {
+  try {
+    const hit = await redis.get(keys.eligibilityRefusal(mediaId));
+    if (!hit) return null;
+    const { code } = JSON.parse(hit) as { code?: string };
+    return code && isIneligibleCode(code) ? refusalError(code) : null;
+  } catch (err) {
+    logger.warn({ err, mediaId }, 'Refusal cache read failed');
+    return null;
+  }
+}
+
+async function writeRefusal(mediaId: string, code: IneligibleCode): Promise<void> {
+  await redis
+    .set(keys.eligibilityRefusal(mediaId), JSON.stringify({ code }), 'EX', REFUSAL_TTL_SECONDS)
+    .catch((err: unknown) => logger.warn({ err, mediaId }, 'Refusal cache write failed'));
 }
 
 async function waitForCache(mediaId: string): Promise<ExtractionRecord | null> {
@@ -174,7 +282,9 @@ async function readCache(mediaId: string): Promise<ExtractionRecord | null> {
   }
 
   // Cold Redis: fall back to the Postgres mirror, which is what keeps SSR
-  // metadata pages working after a cache flush.
+  // metadata pages working after a cache flush. Skipped while Postgres is down
+  // (degraded mode) so a miss doesn't wait on a dead connection.
+  if (!getDbHealth().up) return null;
   try {
     const row = await prisma.mediaCache.findUnique({ where: { id: mediaId } });
     if (row && row.expiresAt.getTime() > Date.now()) {
@@ -203,6 +313,8 @@ async function writeCache(record: ExtractionRecord): Promise<void> {
 
   // Live streams churn every 30s; mirroring them would just thrash Postgres.
   if (record.media.isLive) return;
+  // Degraded mode: Redis already holds the record; don't queue on a dead DB.
+  if (!getDbHealth().up) return;
 
   const mirror = {
     canonicalUrl: record.media.canonicalUrl,
@@ -231,6 +343,8 @@ async function runExtraction(
   // Defence in depth: normaliseSourceUrl already rejected anything odd, but the
   // value is about to become argv, so re-assert it cannot be read as a flag.
   assertNotFlag(source.canonical, 'URL');
+  // Resolve before yt-dlp does: a public-looking name must not point at an internal address.
+  await assertHostResolvesPublic(source.host);
 
   const args = [
     '--dump-single-json',
@@ -238,6 +352,9 @@ async function runExtraction(
     '--no-progress',
     '--no-playlist',
     '--no-call-home',
+    // Never fake X-Forwarded-For: geo-bypass would let a region-locked source through.
+    '--xff',
+    'never',
     '--ignore-config',
     '--skip-download',
     '--no-check-formats',
@@ -282,7 +399,10 @@ async function runExtraction(
   return buildRecord(source, payload);
 }
 
-function translateExtractionError(err: unknown, source: NormalisedSource): AppError {
+export function translateExtractionError(
+  err: unknown,
+  source: Pick<NormalisedSource, 'platform'>,
+): AppError {
   if (!(err instanceof CommandError)) {
     return AppError.upstream('Extraction failed unexpectedly');
   }
@@ -293,8 +413,16 @@ function translateExtractionError(err: unknown, source: NormalisedSource): AppEr
   const stderr = err.stderr.toLowerCase();
   logger.warn({ platform: source.platform, stderr: err.stderr.slice(-800) }, 'yt-dlp extraction failed');
 
+  // YouTube's bot / IP-reputation challenge reads like a login wall but is about OUR address, not
+  // the media: temporary, retryable, and must never be cached as "this video is private".
+  if (/confirm you(?:'|’|‘)?re not a bot/i.test(err.stderr)) {
+    return AppError.unavailable('The source is asking for verification right now. Please try again in a few minutes.');
+  }
   if (stderr.includes('is not a valid url') || stderr.includes('unsupported url')) {
     return AppError.badRequest('That site is not supported yet.');
+  }
+  if (stderr.includes('members-only') || stderr.includes('join this channel') || stderr.includes('premium')) {
+    return refusalError('SOURCE_MEMBERS_ONLY');
   }
   if (stderr.includes('private video') || stderr.includes('login required') || stderr.includes('sign in')) {
     return new AppError(403, 'SOURCE_PRIVATE', 'That media is private or requires a sign-in on the source site.');
@@ -302,11 +430,11 @@ function translateExtractionError(err: unknown, source: NormalisedSource): AppEr
   if (stderr.includes('age') && stderr.includes('confirm')) {
     return new AppError(403, 'SOURCE_AGE_RESTRICTED', 'That media is age-restricted at the source.');
   }
-  if (stderr.includes('video unavailable') || stderr.includes('404') || stderr.includes('not found')) {
-    return AppError.notFound('That media no longer exists at the source.');
-  }
   if (stderr.includes('geo') || stderr.includes('not available in your country')) {
     return new AppError(451, 'SOURCE_GEOBLOCKED', 'That media is blocked in this service\'s region.');
+  }
+  if (stderr.includes('video unavailable') || stderr.includes('404') || stderr.includes('not found')) {
+    return AppError.notFound('That media no longer exists at the source.');
   }
   if (stderr.includes('copyright') || stderr.includes('drm')) {
     return new AppError(403, 'SOURCE_PROTECTED', 'That media is DRM-protected and cannot be processed.');
@@ -317,7 +445,20 @@ function translateExtractionError(err: unknown, source: NormalisedSource): AppEr
   return AppError.upstream('The source could not be read. It may be temporarily unavailable.');
 }
 
-function buildRecord(source: NormalisedSource, payload: YtDlpPayload): ExtractionRecord {
+export function buildRecord(source: NormalisedSource, payload: YtDlpPayload): ExtractionRecord {
+  const verdict = evaluateEligibility({
+    availability: payload.availability ?? null,
+    liveStatus: payload.live_status ?? (payload.is_live ? 'is_live' : null),
+    ageLimit: payload.age_limit ?? 0,
+    formatDrm: (payload.formats ?? []).map((format) => format.has_drm === true),
+    host: source.host,
+  }, getPolicy());
+  if (!verdict.eligible) throw refusalError(verdict.code);
+  if (verdict.dropFormatIndexes.length > 0) {
+    const drop = new Set(verdict.dropFormatIndexes);
+    payload = { ...payload, formats: (payload.formats ?? []).filter((_, i) => !drop.has(i)) };
+  }
+
   const isLive = Boolean(payload.is_live) || payload.live_status === 'is_live';
   const ttlSeconds = isLive ? LIVE_TTL_SECONDS : DEFAULT_TTL_SECONDS;
   const now = new Date();
@@ -350,6 +491,7 @@ function buildRecord(source: NormalisedSource, payload: YtDlpPayload): Extractio
     likeCount: numberOrNull(payload.like_count),
     isLive,
     ageLimit: payload.age_limit ?? 0,
+    availability: payload.availability ?? null,
     thumbnails,
     bestThumbnail: payload.thumbnail ?? thumbnails[thumbnails.length - 1]?.url ?? null,
     subtitles: tracks,
@@ -372,12 +514,21 @@ function buildRecord(source: NormalisedSource, payload: YtDlpPayload): Extractio
   };
 }
 
+/** The platform id the admin policy is keyed by; extractor variants (`twitchvod`) fold into it. */
 function normalisePlatform(extractor: string, source: NormalisedSource): string {
+  // The host is what the user actually pasted; trust it when it names a policed platform.
+  if (isPlatformId(source.platform)) return source.platform;
   const key = extractor.toLowerCase();
   if (!key || key === 'generic') return source.platform;
   // `Youtube:tab` / `TikTok` / `Facebook` → a stable, lowercase family name.
   const family = key.split(':')[0] ?? key;
-  return family === 'twitter' ? 'x' : family || platformFromHost(source.host);
+  if (family.startsWith('twitter')) return 'x';
+  const known = PLATFORM_IDS.find((id) => family.startsWith(id));
+  return known ?? (family || platformFromHost(source.host));
+}
+
+function isPlatformId(value: string): boolean {
+  return (PLATFORM_IDS as readonly string[]).includes(value);
 }
 
 function normaliseFormats(payload: YtDlpPayload): {
@@ -636,7 +787,7 @@ function numberOrNull(value: number | null | undefined): number | null {
  * The upstream URL is never included either way, so "visible" is not "usable".
  */
 export function gateRecord(record: ExtractionRecord, tier: Tier): ExtractionResult {
-  const policy = policyFor(tier);
+  const platform = record.media.platform;
 
   const formats: GatedMediaFormat[] = record.formats.map((format) => {
     const constraint = {
@@ -644,12 +795,12 @@ export function gateRecord(record: ExtractionRecord, tier: Tier): ExtractionResu
       fps: format.fps,
       sizeBytes: format.sizeBytes,
     };
-    const { allowed, reason } = evaluateFormatAccess(tier, constraint);
+    const { allowed, reason } = evaluateAccess(tier, constraint, platform);
     return {
       ...format,
       allowed,
       lockReason: reason,
-      requiredTier: allowed ? tier : minimumTierFor(constraint),
+      requiredTier: allowed ? tier : requiredTierFor(constraint, platform),
     };
   });
 
@@ -691,20 +842,19 @@ export function findFormat(record: ExtractionRecord, formatId: string): MediaFor
  * than trusting the `allowed` flag the client was shown — that flag was
  * computed for whatever tier the caller had when the page rendered.
  */
-export function assertFormatAllowed(format: MediaFormat, tier: Tier): void {
-  const { allowed, reason } = evaluateFormatAccess(tier, {
-    height: format.height,
-    fps: format.fps,
-    sizeBytes: format.sizeBytes,
-  });
+export function assertFormatAllowed(format: MediaFormat, tier: Tier, platform?: string): void {
+  const { allowed, reason } = evaluateAccess(
+    tier,
+    { height: format.height, fps: format.fps, sizeBytes: format.sizeBytes },
+    platform,
+  );
   if (allowed) return;
 
-  const required = minimumTierFor({
-    height: format.height,
-    fps: format.fps,
-    sizeBytes: format.sizeBytes,
-  });
-  const policy = policyFor(tier);
+  const required = requiredTierFor(
+    { height: format.height, fps: format.fps, sizeBytes: format.sizeBytes },
+    platform,
+  );
+  const policy = tierPolicyFor(tier, platform);
 
   const message =
     reason === 'FILE_SIZE'
@@ -719,6 +869,12 @@ export function assertFormatAllowed(format: MediaFormat, tier: Tier): void {
 /** Reads a cached record without triggering extraction. Used by playback routes. */
 export async function getCachedRecord(mediaId: string): Promise<ExtractionRecord | null> {
   if (!/^[0-9a-f]{24}$/.test(mediaId)) throw AppError.badRequest('Invalid media id');
+  await assertNotTakenDown(mediaId);
+  return readCache(mediaId);
+}
+
+/** Cache read with no takedown check: the admin preview needs to see records of removed media too. */
+export async function getCachedRecordUnchecked(mediaId: string): Promise<ExtractionRecord | null> {
   return readCache(mediaId);
 }
 

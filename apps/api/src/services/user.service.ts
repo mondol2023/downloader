@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import argon2 from 'argon2';
 import type { Subscription, User } from '@prisma/client';
 import type { AuthUser, Tier } from '@media/shared';
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
+import { recordLedger } from '../features/persistence/index.js';
 
 /**
  * Argon2id with parameters sized for a login endpoint: ~64 MB and 3 passes
@@ -115,6 +117,7 @@ export function toAuthUser(user: User & { subscription?: Subscription | null }):
     email: user.email,
     displayName: user.displayName,
     tier: user.tier as Tier,
+    role: user.role,
     emailVerified: user.emailVerified,
     subscriptionStatus: user.subscription?.status ?? null,
     subscriptionEndsAt: user.subscription?.currentPeriodEnd?.toISOString() ?? null,
@@ -142,7 +145,10 @@ export async function recordAudit(input: {
   metadata?: Record<string, unknown>;
 }): Promise<void> {
   try {
-    await prisma.auditEvent.create({
+    await recordLedger({
+      kind: 'audit_event',
+      id: randomUUID(),
+      at: new Date().toISOString(),
       data: {
         userId: input.userId ?? null,
         guestKey: input.guestKey ?? null,
@@ -150,7 +156,7 @@ export async function recordAudit(input: {
         outcome: input.outcome,
         ip: input.ip ?? null,
         userAgent: input.userAgent?.slice(0, 512) ?? null,
-        metadata: (input.metadata ?? {}) as object,
+        metadata: input.metadata ?? {},
       },
     });
   } catch (err) {

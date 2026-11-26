@@ -37,14 +37,58 @@ const schema = z.object({
   FFPROBE_PATH: z.string().default('ffprobe'),
   EXTRACTION_TIMEOUT_MS: z.coerce.number().int().positive().default(45_000),
   YTDLP_COOKIES_FILE: z.string().optional(),
+  /** Daily 04:00 `yt-dlp -U` in every process that runs yt-dlp. Off for pip/apt installs, which refuse `-U`. */
+  YTDLP_AUTO_UPDATE: bool.default(false),
+
+  /** Optional Google Sheets ledger mirror; off unless BOTH are set. Key file must live outside the repo. */
+  SHEETS_SPREADSHEET_ID: z.string().optional(),
+  GOOGLE_SERVICE_ACCOUNT_FILE: z.string().optional(),
 
   STORAGE_DIR: z.string().default('./storage'),
+  /** Past this many GiB in STORAGE_DIR, new jobs are refused with STORAGE_FULL until a sweep frees space. */
+  STORAGE_MAX_GB: z.coerce.number().positive().default(20),
   ARTIFACT_TTL: z.coerce.number().int().positive().default(86_400),
   /** How long a minted stream grant stays valid. Short: playback re-mints. */
   STREAM_GRANT_TTL: z.coerce.number().int().positive().default(21_600),
+  /** Where CMS images are served from; the sanitiser keeps `<img>` only under this origin. Defaults to the API's own asset route. */
+  CMS_ASSET_ORIGIN: z.string().url().optional(),
+  /** Where the API reaches the web app to invalidate cached CMS pages. Both must be set, else the web app relies on its 5-minute ISR window. */
+  WEB_INTERNAL_URL: z.string().url().optional(),
+  REVALIDATE_SECRET: z.string().min(16, 'REVALIDATE_SECRET must be at least 16 chars').optional(),
+  CMS_MAX_UPLOAD_MB: z.coerce.number().positive().default(5),
   /** Empty = allow any public host (needed for 1000+ extractors). */
   ALLOWED_STREAM_HOSTS: csv,
+  /** Extra hosts to refuse. Only read on first boot, to seed policy version 1; after that the admin policy owns it. */
+  BLOCKED_HOSTS_EXTRA: csv,
 
+  /** True only when the API sits behind a proxy/CDN that sets the country header. */
+  TRUST_PROXY: bool.default(false),
+  /** Proxy/CDN peers (CIDRs or exact IPs) whose country header is believed. Empty = header ignored. */
+  TRUSTED_PROXY_CIDRS: csv,
+  /** This deployment's region (e.g. eu). */
+  REGION: z.string().trim().toLowerCase().default('default'),
+  /** Regions that have workers deployed. */
+  WORKER_REGIONS: csv.transform((v) => v.map((r) => r.toLowerCase())),
+  COUNTRY_HEADER: z.string().default('cf-ipcountry'),
+  /** JSON map of ISO country -> region, e.g. {"BD":"bd","IN":"in","DE":"eu"}. */
+  COUNTRY_TO_REGION: z
+    .string()
+    .default('{}')
+    .transform((v, ctx) => {
+      try {
+        const o = JSON.parse(v);
+        if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error('not an object');
+        return Object.fromEntries(
+          Object.entries(o).map(([k, r]) => [k.toUpperCase(), String(r).toLowerCase()]),
+        ) as Record<string, string>;
+      } catch {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'COUNTRY_TO_REGION must be a JSON object' });
+        return z.NEVER;
+      }
+    }),
+
+  /** Which queues this worker process consumes. */
+  WORKER_ROLE: csv.transform((v) => (v.length ? v.map((r) => r.toLowerCase()) : ['download'])),
   WORKER_CONCURRENCY: z.coerce.number().int().positive().default(2),
   WORKER_CONCURRENCY_PRO: z.coerce.number().int().positive().default(4),
 

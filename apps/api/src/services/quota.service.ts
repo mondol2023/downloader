@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { QuotaSnapshot, Tier } from '@media/shared';
-import { formatCount, isUnlimited, policyFor } from '@media/shared';
+import { formatCount, isUnlimited } from '@media/shared';
+import { tierPolicyFor } from '../features/restrictions/enforce.js';
 import type { RequestIdentity } from '../types/express.js';
 import { keys, redis } from '../lib/redis.js';
+import { getDbHealth, recordLedger } from '../features/persistence/index.js';
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
@@ -81,18 +83,30 @@ async function hydrateWindow(subject: string, identity: QuotaIdentity): Promise<
   const key = keys.quotaWindow(subject);
   if ((await redis.exists(key)) === 1) return;
 
+  // Degraded mode: the ledger is unreachable, so start from an empty window
+  // rather than failing guest extraction (which only reads the snapshot).
+  if (!getDbHealth().up) return;
+
   const since = new Date(Date.now() - WINDOW_MS);
   const where =
     identity.userId != null
       ? { userId: identity.userId, createdAt: { gte: since } }
       : { guestKey: identity.guestKey, createdAt: { gte: since } };
 
-  const rows = await prisma.downloadLog.findMany({
-    where,
-    select: { id: true, jobId: true, createdAt: true },
-    orderBy: { createdAt: 'asc' },
-    take: 500,
-  });
+  let rows;
+  try {
+    rows = await prisma.downloadLog.findMany({
+      where,
+      select: { id: true, jobId: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+      take: 500,
+    });
+  } catch (err) {
+    // The DB can die between probes; an unreadable ledger must not take the
+    // quota snapshot (and therefore extraction) down with it.
+    logger.warn({ err, subject }, 'Quota window rehydrate failed; using empty window');
+    return;
+  }
 
   if (rows.length === 0) return;
 
@@ -138,7 +152,7 @@ export interface QuotaReservation {
  * can deep-link the right upsell.
  */
 export async function reserveDownload(identity: QuotaIdentity): Promise<QuotaReservation> {
-  const policy = policyFor(identity.tier);
+  const policy = tierPolicyFor(identity.tier);
   const reservationId = randomUUID();
   const reservation: QuotaReservation = {
     id: reservationId,
@@ -274,9 +288,13 @@ export async function commitDownload(input: {
   userAgent?: string | null;
 }): Promise<void> {
   try {
-    await prisma.downloadLog.upsert({
-      where: { jobId: input.jobId },
-      create: {
+    // Goes through the outbox so a Postgres outage doesn't lose the ledger line.
+    // The job id doubles as the row id, which makes retries and replays idempotent.
+    await recordLedger({
+      kind: 'download_log',
+      id: input.jobId,
+      at: new Date().toISOString(),
+      data: {
         jobId: input.jobId,
         userId: input.userId,
         guestKey: input.guestKey,
@@ -288,7 +306,6 @@ export async function commitDownload(input: {
         ip: input.ip ?? null,
         userAgent: input.userAgent?.slice(0, 512) ?? null,
       },
-      update: { bytes: BigInt(Math.max(0, Math.round(input.bytes))) },
     });
   } catch (err) {
     // Never fail a completed download because the ledger write failed.
@@ -297,7 +314,7 @@ export async function commitDownload(input: {
 }
 
 export async function getQuotaSnapshot(identity: QuotaIdentity): Promise<QuotaSnapshot> {
-  const policy = policyFor(identity.tier);
+  const policy = tierPolicyFor(identity.tier);
 
   if (isUnlimited(policy.dailyDownloads) && isUnlimited(policy.maxConcurrentJobs)) {
     return {
@@ -349,7 +366,7 @@ export async function getQuotaSnapshot(identity: QuotaIdentity): Promise<QuotaSn
  * the worker re-checks the real Content-Length before writing bytes to disk.
  */
 export function assertSizeAllowed(tier: Tier, sizeBytes: number | null): void {
-  const policy = policyFor(tier);
+  const policy = tierPolicyFor(tier);
   if (sizeBytes == null || isUnlimited(policy.maxFileSizeBytes)) return;
   if (sizeBytes > policy.maxFileSizeBytes) {
     throw AppError.payloadTooLarge(

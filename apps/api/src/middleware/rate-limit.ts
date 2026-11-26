@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { policyFor } from '@media/shared';
+import { tierPolicyFor } from '../features/restrictions/enforce.js';
 import { keys, redis } from '../lib/redis.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
@@ -97,7 +97,7 @@ export function rateLimit(options: RateLimitOptions) {
 export const extractionRateLimit = rateLimit({
   bucket: 'extract',
   windowSeconds: 3600,
-  max: (req) => policyFor(req.identity.tier).hourlyExtractions,
+  max: (req) => tierPolicyFor(req.identity.tier).hourlyExtractions,
   message: 'Extraction rate limit reached for your plan',
 });
 

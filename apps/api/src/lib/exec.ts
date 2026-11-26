@@ -1,4 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import type { Readable } from 'node:stream';
 import { AppError } from './errors.js';
 import { logger } from './logger.js';
 
@@ -61,7 +62,7 @@ export function runCommand(command: string, options: RunOptions): Promise<RunRes
   const maxOutput = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT;
 
   return new Promise<RunResult>((resolve, reject) => {
-    let child: ChildProcessWithoutNullStreams;
+    let child: ChildProcessByStdio<null, Readable, Readable>;
     try {
       child = spawn(command, options.args, {
         cwd: options.cwd,

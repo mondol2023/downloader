@@ -3,9 +3,11 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Router } from 'express';
 import { z } from 'zod';
-import { AUDIO_FORMATS, policyFor, type AudioFormat } from '@media/shared';
+import { AUDIO_FORMATS, type AudioFormat } from '@media/shared';
 import { env } from '../config/env.js';
 import { prisma } from '../lib/prisma.js';
+import { redis } from '../lib/redis.js';
+import { assertStorageAvailable, gbToBytes, readStorageUsage } from '../features/maintenance/index.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { asyncHandler } from '../middleware/error-handler.js';
@@ -31,6 +33,14 @@ import {
 } from '../services/job.service.js';
 import { enqueueMediaJob, removeQueuedJob } from '../queue/queues.js';
 import { recordAudit } from '../services/user.service.js';
+import {
+  assertAdultConfirmed,
+  assertDownloadsOpen,
+  assertPlatformAllowed,
+  assertRulesAllowAction,
+  tierPolicyFor,
+} from '../features/restrictions/enforce.js';
+import { BIRTHDATE_HEADER } from '../features/restrictions/age-gate.js';
 
 const router = Router();
 
@@ -57,12 +67,23 @@ router.post(
   asyncHandler(async (req, res) => {
     const input = downloadRequest.parse(req.body);
     const tier = req.identity.tier;
-    const policy = policyFor(tier);
 
-    const record = await extractMedia(input.url);
+    // Maintenance and the downloads switch come first: nothing below may spend quota.
+    assertDownloadsOpen();
+    // Measured by the worker after each sweep/job; refuse before any quota is reserved.
+    assertStorageAvailable(await readStorageUsage(redis), gbToBytes(env.STORAGE_MAX_GB));
+
+    const record = await extractMedia(input.url, { tier });
+    // Before quota is reserved. The birthdate is deliberately not copied into the job or the queue
+    // payload: the worker re-checks the policy, not the person.
+    assertAdultConfirmed(record.media.ageLimit, req.header(BIRTHDATE_HEADER));
     const format = findFormat(record, input.formatId);
+    const platform = record.media.platform;
+    const policy = tierPolicyFor(tier, platform);
 
-    assertFormatAllowed(format, tier);
+    assertPlatformAllowed(platform, 'download');
+    assertRulesAllowAction({ action: 'download', platform, canonicalUrl: record.media.canonicalUrl }, tier);
+    assertFormatAllowed(format, tier, platform);
     assertSizeAllowed(tier, format.sizeBytes);
 
     if (input.audioFormat) {
@@ -98,6 +119,7 @@ router.post(
           mediaId: record.media.id,
           platform: record.media.platform,
           mediaTitle: record.media.title,
+          region: record.region ?? null,
           formatId: format.id,
           formatLabel: input.audioFormat
             ? `${format.label} → ${input.audioFormat.toUpperCase()}`
@@ -125,7 +147,7 @@ router.post(
         ...(input.subtitleLang ? { subtitleLang: input.subtitleLang } : {}),
         ipHash: req.identity.ipHash,
         userAgent: req.header('user-agent') ?? null,
-      });
+      }, record.region ?? null);
 
       await recordAudit({
         userId: req.identity.userId,
@@ -182,7 +204,7 @@ router.post(
     }
 
     // Remove it if it has not started; otherwise set the flag the worker polls.
-    const removed = await removeQueuedJob(row.id);
+    const removed = await removeQueuedJob(row.id, row.region);
     await requestCancellation(row.id);
 
     if (removed) {

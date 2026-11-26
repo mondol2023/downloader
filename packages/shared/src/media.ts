@@ -74,6 +74,8 @@ export interface MediaMetadata {
   likeCount: number | null;
   isLive: boolean;
   ageLimit: number;
+  /** yt-dlp `availability` (public, unlisted, …); null when the extractor does not report it. */
+  availability: string | null;
   thumbnails: Thumbnail[];
   bestThumbnail: string | null;
   subtitles: SubtitleTrack[];
@@ -151,11 +153,14 @@ export interface DownloadRequest {
   subtitleLang?: string;
 }
 
+export type UserRole = 'USER' | 'EDITOR' | 'ADMIN';
+
 export interface AuthUser {
   id: string;
   email: string;
   displayName: string | null;
   tier: Tier;
+  role: UserRole;
   emailVerified: boolean;
   subscriptionStatus: string | null;
   subscriptionEndsAt: string | null;

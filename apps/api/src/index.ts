@@ -1,4 +1,5 @@
 import http from 'node:http';
+import path from 'node:path';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
@@ -9,6 +10,15 @@ import { env, isProd } from './config/env.js';
 import { logger } from './lib/logger.js';
 import { disconnectPrisma, prisma } from './lib/prisma.js';
 import { disconnectRedis, redis } from './lib/redis.js';
+import {
+  getDbHealth,
+  startDbHealthProbe,
+  startOutboxDrainer,
+  startSheetsMirrorFromEnv,
+} from './features/persistence/index.js';
+import { startPolicyStore, stopPolicyStore } from './features/restrictions/policy.store.js';
+import { createHealthRouter, getToolVersions, initToolVersions } from './features/health/index.js';
+import { runYtDlpSelfUpdate, startYtDlpUpdateListener } from './features/maintenance/index.js';
 import { closeQueue } from './queue/queues.js';
 import { attachIdentity, csrfGuard } from './middleware/identity.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
@@ -146,12 +156,28 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', uptime: Math.round(process.uptime()) });
 });
 
+app.use(
+  createHealthRouter({
+    dbUp: () => getDbHealth().up,
+    redisPing: () => redis.ping(),
+    tools: getToolVersions,
+    region: env.REGION,
+  }),
+);
+void initToolVersions(
+  { ytDlp: env.YTDLP_PATH, ffmpeg: env.FFMPEG_PATH, ffprobe: env.FFPROBE_PATH },
+  logger,
+);
+// The worker's daily tick broadcasts; the API extracts with its own yt-dlp, so it updates itself too.
+const stopYtDlpListener = startYtDlpUpdateListener({
+  subscriber: redis.duplicate(),
+  update: () => runYtDlpSelfUpdate({ enabled: env.YTDLP_AUTO_UPDATE, ytDlpPath: env.YTDLP_PATH, log: logger }),
+  log: logger,
+});
+
 app.get('/health/ready', async (_req, res) => {
   const [db, cache] = await Promise.all([
-    prisma.$queryRaw`SELECT 1`.then(
-      () => true,
-      () => false,
-    ),
+    Promise.resolve(getDbHealth().up),
     redis.ping().then(
       () => true,
       () => false,
@@ -174,6 +200,19 @@ app.use('/api/v1', apiRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
+
+// Probe Postgres so routes that need it can 503 instantly during an outage.
+const stopDbProbe = startDbHealthProbe();
+// Replay ledger/audit rows queued during an outage once the DB is back.
+const stopOutboxDrainer = startOutboxDrainer();
+// Optional Google Sheets copy of the ledger (no-op unless configured).
+const stopSheetsMirror = startSheetsMirrorFromEnv();
+// Runtime restriction policy: database → snapshot file → code defaults, refreshed on `policy:changed`.
+void startPolicyStore({
+  prisma,
+  redis,
+  snapshotPath: path.join(path.resolve(env.STORAGE_DIR), 'policy.snapshot.json'),
+}).catch((err: unknown) => logger.error({ err }, 'Policy store failed to start; using code defaults'));
 
 const server = http.createServer(app);
 // Slightly above a typical 60s ALB idle timeout so the proxy, not the origin,
@@ -216,6 +255,11 @@ async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, 'Shutting down');
 
   clearInterval(pruneTimer);
+  stopDbProbe();
+  stopOutboxDrainer();
+  stopSheetsMirror();
+  await stopYtDlpListener();
+  await stopPolicyStore().catch(() => undefined);
 
   const forceExit = setTimeout(() => {
     logger.error('Graceful shutdown timed out; forcing exit');

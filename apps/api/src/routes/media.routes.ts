@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { policyFor } from '@media/shared';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
 import { toWebVtt } from '../lib/subtitles.js';
@@ -16,6 +15,16 @@ import {
 } from '../services/extraction.service.js';
 import { assertFetchableUrl, mintPlaybackGrant } from '../services/stream.service.js';
 import { getQuotaSnapshot, quotaIdentity } from '../services/quota.service.js';
+import { env } from '../config/env.js';
+import { resolveUserRegion } from '../features/regions/region.js';
+import {
+  assertAdultConfirmed,
+  assertPlatformAllowed,
+  assertRulesAllowAction,
+  assertRulesAllowRecord,
+  tierPolicyFor,
+} from '../features/restrictions/enforce.js';
+import { BIRTHDATE_HEADER } from '../features/restrictions/age-gate.js';
 
 const router = Router();
 
@@ -45,7 +54,11 @@ router.post(
     const record = await extractMedia(input.url, {
       signal: controller.signal,
       force: input.refresh === true,
+      userRegion: resolveUserRegion(req, env),
+      tier: req.identity.tier,
     });
+    // After extraction (the rating is only known then), before anything reaches the client.
+    assertAdultConfirmed(record.media.ageLimit, req.header(BIRTHDATE_HEADER));
 
     const result = gateRecord(record, req.identity.tier);
 
@@ -63,7 +76,7 @@ router.post(
     res.json({
       data: {
         ...result,
-        policy: policyFor(req.identity.tier),
+        policy: tierPolicyFor(req.identity.tier, record.media.platform),
         quota: await getQuotaSnapshot(quotaIdentity(req.identity)),
       },
     });
@@ -76,6 +89,8 @@ router.get(
   asyncHandler(async (req, res) => {
     const record = await getCachedRecord(req.params.mediaId as string);
     if (!record) throw AppError.notFound('That media is not cached; submit the URL again.');
+    assertRulesAllowRecord(record, req.identity.tier);
+    assertAdultConfirmed(record.media.ageLimit, req.header(BIRTHDATE_HEADER));
     res.json({ data: gateRecord(record, req.identity.tier) });
   }),
 );
@@ -96,14 +111,20 @@ router.post(
       .object({ url: z.string().min(1).max(2048), formatId: z.string().min(1).max(128) })
       .parse(req.body);
 
-    const policy = policyFor(req.identity.tier);
+    const policy = tierPolicyFor(req.identity.tier);
     if (!policy.allowStreaming) {
       throw AppError.forbidden('In-app playback is not available on your plan', 'FREE');
     }
 
-    const record = await extractMedia(input.url);
+    const record = await extractMedia(input.url, { tier: req.identity.tier });
+    assertAdultConfirmed(record.media.ageLimit, req.header(BIRTHDATE_HEADER));
     const format = findFormat(record, input.formatId);
-    assertFormatAllowed(format, req.identity.tier);
+    assertPlatformAllowed(record.media.platform, 'playback');
+    assertRulesAllowAction(
+      { action: 'playback', platform: record.media.platform, canonicalUrl: record.media.canonicalUrl },
+      req.identity.tier,
+    );
+    assertFormatAllowed(format, req.identity.tier, record.media.platform);
 
     const grant = mintPlaybackGrant(record, format, {
       sub: req.identity.subject,
@@ -142,6 +163,8 @@ router.get(
 
     const record = await getCachedRecord(req.params.mediaId as string);
     if (!record) throw AppError.notFound('That media is not cached; submit the URL again.');
+    assertRulesAllowRecord(record, req.identity.tier);
+    assertAdultConfirmed(record.media.ageLimit, req.header(BIRTHDATE_HEADER));
 
     const source = record.subtitleSources[lang];
     if (!source) throw AppError.notFound('No subtitles for that language');

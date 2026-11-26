@@ -1,0 +1,43 @@
+{
+  "name": "@media/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "next typegen && tsc --noEmit",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@media/rich-text": "^1.0.0",
+    "@media/shared": "*",
+    "@radix-ui/react-dialog": "^1.3.1",
+    "@radix-ui/react-progress": "^1.2.1",
+    "@radix-ui/react-toast": "^1.3.1",
+    "@tanstack/react-query": "^5.108.4",
+    "@tiptap/extension-bubble-menu": "^2.27.3",
+    "@tiptap/extension-character-count": "^2.27.3",
+    "@tiptap/extension-code-block-lowlight": "^2.27.3",
+    "@tiptap/extension-placeholder": "^2.27.3",
+    "@tiptap/react": "^2.27.3",
+    "hls.js": "^1.7.4",
+    "lowlight": "^3.3.0",
+    "motion": "^14.14.0",
+    "next": "16.4.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@tailwindcss/turbopack": "4.3.3",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.6",
+    "tailwindcss": "4.3.3",
+    "typescript": "^5"
+  }
+}

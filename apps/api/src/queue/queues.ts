@@ -3,6 +3,7 @@ import type { AudioFormat, Tier } from '@media/shared';
 import { policyFor } from '@media/shared';
 import { createQueueConnection } from '../lib/redis.js';
 import { logger } from '../lib/logger.js';
+import { isRegionalRegion, regionalQueueName } from '../features/regions/region.js';
 
 /**
  * One queue, priority-ordered.
@@ -36,42 +37,66 @@ export interface MediaJobPayload {
 
 const connection = createQueueConnection('queue-producer');
 
-export const mediaQueue = new Queue<MediaJobPayload>(MEDIA_QUEUE_NAME, {
-  connection,
-  defaultJobOptions: {
-    attempts: 2,
-    backoff: { type: 'exponential', delay: 10_000 },
-    // Keep a short tail for debugging; the Job table is the real history.
-    removeOnComplete: { age: 3600, count: 500 },
-    removeOnFail: { age: 86_400, count: 500 },
-  },
-});
+function buildQueue(name: string): Queue<MediaJobPayload> {
+  const queue = new Queue<MediaJobPayload>(name, {
+    connection,
+    defaultJobOptions: {
+      attempts: 2,
+      backoff: { type: 'exponential', delay: 10_000 },
+      // Keep a short tail for debugging; the Job table is the real history.
+      removeOnComplete: { age: 3600, count: 500 },
+      removeOnFail: { age: 86_400, count: 500 },
+    },
+  });
+  queue.on('error', (err) => logger.error({ err, queue: name }, 'Media queue error'));
+  return queue;
+}
 
-mediaQueue.on('error', (err) => logger.error({ err }, 'Media queue error'));
+export const mediaQueue = buildQueue(MEDIA_QUEUE_NAME);
 
-export async function enqueueMediaJob(payload: MediaJobPayload): Promise<void> {
+/**
+ * A job whose source needed the user's own region is downloaded there: it goes to that region's
+ * queue (`media-jobs-<region>`), consumed only by a download worker whose REGION matches.
+ */
+const regionalQueues = new Map<string, Queue<MediaJobPayload>>();
+
+function queueFor(region: string | null | undefined): Queue<MediaJobPayload> {
+  if (!isRegionalRegion(region)) return mediaQueue;
+  let queue = regionalQueues.get(region);
+  if (!queue) regionalQueues.set(region, (queue = buildQueue(regionalQueueName(MEDIA_QUEUE_NAME, region))));
+  return queue;
+}
+
+export async function enqueueMediaJob(payload: MediaJobPayload, region?: string | null): Promise<void> {
   const options: JobsOptions = {
     jobId: payload.jobId,
     priority: policyFor(payload.tier).queuePriority,
   };
-  await mediaQueue.add('process-media', payload, options);
+  await queueFor(region).add('process-media', payload, options);
   logger.info(
-    { jobId: payload.jobId, tier: payload.tier, priority: options.priority },
+    { jobId: payload.jobId, tier: payload.tier, priority: options.priority, region: region ?? null },
     'Media job enqueued',
   );
 }
 
 /** Best-effort cancellation. A running job is stopped via the abort flag instead. */
-export async function removeQueuedJob(jobId: string): Promise<boolean> {
-  const job = await mediaQueue.getJob(jobId);
-  if (!job) return false;
-  const state = await job.getState();
-  if (state === 'active') return false;
-  await job.remove();
-  return true;
+export async function removeQueuedJob(jobId: string, region?: string | null): Promise<boolean> {
+  // The row's region says where it was queued; the main queue is the fallback for a stale value.
+  const queues = isRegionalRegion(region) ? [queueFor(region), mediaQueue] : [mediaQueue];
+  for (const queue of queues) {
+    const job = await queue.getJob(jobId);
+    if (!job) continue;
+    const state = await job.getState();
+    if (state === 'active') return false;
+    await job.remove();
+    return true;
+  }
+  return false;
 }
 
 export async function closeQueue(): Promise<void> {
-  await mediaQueue.close().catch((err: unknown) => logger.error({ err }, 'Queue close failed'));
+  for (const queue of [mediaQueue, ...regionalQueues.values()]) {
+    await queue.close().catch((err: unknown) => logger.error({ err }, 'Queue close failed'));
+  }
   await connection.quit().catch(() => undefined);
 }

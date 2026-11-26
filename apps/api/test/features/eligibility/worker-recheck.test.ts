@@ -1,0 +1,266 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+/**
+ * The media can change between extraction and download. When yt-dlp's stderr says
+ * the source went private, the worker must fail the job with the same typed
+ * refusal the API uses, and must not charge the user for it.
+ */
+
+const processors: Array<(job: unknown, token?: string) => Promise<void>> = [];
+
+vi.mock('bullmq', () => ({
+  Worker: class {
+    constructor(_name: string, processor: (job: unknown, token?: string) => Promise<void>) {
+      processors.push(processor);
+    }
+    on() {
+      return this;
+    }
+    async close() {}
+  },
+  Queue: class {
+    on() {
+      return this;
+    }
+    async close() {}
+  },
+  DelayedError: class DelayedError extends Error {},
+}));
+
+// Maintenance (sweep, storage gauge, yt-dlp updates) is covered in test/features/maintenance.
+vi.mock('../../../src/features/maintenance/index.js', () => ({
+  ARTIFACT_SWEEP_JOB: 'artifact-sweep',
+  MAINTENANCE_QUEUE_NAME: 'maintenance',
+  YTDLP_UPDATE_CHANNEL: 'tools:ytdlp-update',
+  YTDLP_UPDATE_JOB: 'ytdlp-update',
+  directorySizeBytes: async () => 0,
+  runYtDlpSelfUpdate: async () => ({ ran: false, ok: false, version: null }),
+  scheduleMaintenance: async () => undefined,
+  startYtDlpUpdateListener: () => async () => undefined,
+  sweepExpiredArtifacts: async () => 0,
+  writeStorageUsage: async () => undefined,
+}));
+
+vi.mock('../../../src/config/env.js', () => ({
+  env: {
+    STORAGE_DIR: './tmp-worker-recheck-test',
+    YTDLP_PATH: 'yt-dlp',
+    YTDLP_COOKIES_FILE: undefined,
+    FFMPEG_PATH: 'ffmpeg',
+    WORKER_CONCURRENCY: 2,
+    WORKER_CONCURRENCY_PRO: 1,
+    ARTIFACT_TTL: 3600,
+    EXTRACTION_TIMEOUT_MS: 1000,
+    WORKER_ROLE: ['download'],
+    REGION: 'default',
+  },
+}));
+
+const jobUpdate = vi.fn(async () => ({}));
+const jobFindUnique = vi.fn();
+vi.mock('../../../src/lib/prisma.js', () => ({
+  prisma: {
+    job: { findUnique: jobFindUnique, update: jobUpdate, findMany: vi.fn(async () => []) },
+  },
+  disconnectPrisma: vi.fn(),
+}));
+vi.mock('../../../src/lib/redis.js', () => ({
+  createQueueConnection: () => ({ quit: vi.fn() }),
+  disconnectRedis: vi.fn(),
+  redis: { duplicate: () => ({}) },
+  keys: {
+    extraction: (id: string) => `media:extract:${id}`,
+    extractionLock: (id: string) => `media:extract:lock:${id}`,
+    eligibilityRefusal: (id: string) => `elig:${id}`,
+  },
+}));
+vi.mock('../../../src/lib/logger.js', () => {
+  const l: Record<string, unknown> = {
+    warn: vi.fn(),
+    info: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
+  l.child = () => l;
+  return { logger: l };
+});
+
+const commitDownload = vi.fn();
+const release = vi.fn(async () => undefined);
+vi.mock('../../../src/services/quota.service.js', () => ({
+  commitDownload,
+  release,
+  releaseSlot: vi.fn(),
+}));
+vi.mock('../../../src/services/job.service.js', () => ({
+  clearCancellation: vi.fn(),
+  isCancellationRequested: vi.fn(async () => false),
+  publishProgress: vi.fn(),
+}));
+vi.mock('../../../src/features/persistence/index.js', () => ({
+  getDbHealth: () => ({ up: true }),
+  startDbHealthProbe: () => () => undefined,
+  startOutboxDrainer: () => () => undefined,
+  startSheetsMirrorFromEnv: () => () => undefined,
+}));
+// The engine binaries are present in this fake environment; runCommand below fakes only the download.
+vi.mock('../../../src/features/health/index.js', () => ({
+  ensureEngineAvailable: async () => undefined,
+  initToolVersions: async () => ({ ytDlp: 'test', ffmpeg: 'test', ffprobe: 'test' }),
+}));
+
+const runCommand = vi.fn();
+vi.mock('../../../src/lib/exec.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/lib/exec.js')>(
+    '../../../src/lib/exec.js',
+  );
+  return { ...actual, runCommand };
+});
+
+vi.mock('../../../src/services/extraction.service.js', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../../src/services/extraction.service.js')
+  >('../../../src/services/extraction.service.js');
+  return {
+    ...actual,
+    extractMedia: vi.fn(async () => ({ media: { platform: 'youtube' } })),
+    findFormat: vi.fn(() => ({ id: '18', track: 'video', requiresMux: false })),
+  };
+});
+
+const tierPolicySpy = vi.fn();
+vi.mock('../../../src/features/restrictions/enforce.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/features/restrictions/enforce.js')>(
+    '../../../src/features/restrictions/enforce.js',
+  );
+  tierPolicySpy.mockImplementation(actual.tierPolicyFor);
+  return { ...actual, tierPolicyFor: tierPolicySpy };
+});
+
+vi.mock('../../../src/queue/queues.js', () => ({ MEDIA_QUEUE_NAME: 'media-jobs' }));
+
+await import('../../../src/queue/worker.js');
+const { CommandError } = await import('../../../src/lib/exec.js');
+
+const payload = {
+  jobId: 'job1',
+  subject: 'user:u1',
+  userId: 'u1',
+  guestKey: null,
+  tier: 'FREE',
+  mediaId: 'm1',
+  sourceUrl: 'https://www.youtube.com/watch?v=abc',
+  formatId: '18',
+  embedSubtitles: false,
+  ipHash: 'h',
+  userAgent: null,
+};
+
+function bullJob() {
+  return { data: payload, attemptsMade: 0, opts: { attempts: 2 } };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  jobFindUnique.mockResolvedValue({
+    id: 'job1',
+    state: 'QUEUED',
+    percent: 0,
+    startedAt: null,
+    mediaTitle: 'Some video',
+  });
+});
+
+describe('worker re-check', () => {
+  it('job fails with SOURCE_PRIVATE and no quota charge when download stderr says private', async () => {
+    runCommand.mockRejectedValue(new CommandError('exit 1', 1, 'ERROR: Private video'));
+
+    await processors[0]!(bullJob(), 'tok');
+
+    const failed = jobUpdate.mock.calls
+      .map(([arg]) => (arg as { data: { state?: string; error?: string } }).data)
+      .find((d) => d.state === 'FAILED');
+    expect(failed).toBeDefined();
+    expect(failed!.error!.startsWith('SOURCE_PRIVATE')).toBe(true);
+    expect(failed!.error).toMatch(/^SOURCE_PRIVATE: .+/);
+
+    // The ledger line is only written by commitDownload; the reservation is handed back.
+    expect(commitDownload).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it('members-only stderr maps to SOURCE_MEMBERS_ONLY', async () => {
+    runCommand.mockRejectedValue(
+      new CommandError('exit 1', 1, 'ERROR: Join this channel to get access to members-only content'),
+    );
+
+    await processors[0]!(bullJob(), 'tok');
+
+    const failed = jobUpdate.mock.calls
+      .map(([arg]) => (arg as { data: { state?: string; error?: string } }).data)
+      .find((d) => d.state === 'FAILED');
+    expect(failed!.error).toMatch(/^SOURCE_MEMBERS_ONLY: /);
+    expect(commitDownload).not.toHaveBeenCalled();
+  });
+
+  it('download argv never fakes X-Forwarded-For (--xff never, before the URL separator)', async () => {
+    runCommand.mockResolvedValue({ stdout: '', stderr: '' });
+    await processors[0]!(bullJob(), 'tok').catch(() => undefined);
+
+    const args = (runCommand.mock.calls[0]![1] as { args: string[] }).args;
+    const i = args.indexOf('--xff');
+    expect(i).toBeGreaterThan(-1);
+    expect(args[i + 1]).toBe('never');
+    expect(i).toBeLessThan(args.indexOf('--'));
+  });
+
+  it('a bot / IP-reputation challenge is retryable, not a permanent SOURCE_PRIVATE failure', async () => {
+    runCommand.mockRejectedValue(
+      new CommandError('exit 1', 1, "ERROR: [youtube] abc: Sign in to confirm you're not a bot"),
+    );
+
+    await expect(processors[0]!(bullJob(), 'tok')).rejects.toThrow();
+
+    const states = jobUpdate.mock.calls.map(([arg]) => (arg as { data: { state?: string } }).data.state);
+    expect(states).not.toContain('FAILED');
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  it('a rule published while the job was queued fails it with SOURCE_RULE_BLOCKED and releases the reservation', async () => {
+    const { DEFAULT_POLICY } = await import('../../../src/features/restrictions/restrictions.config.js');
+    const { mergePolicy } = await import('../../../src/features/restrictions/merge.js');
+    const { setCurrentPolicy } = await import('../../../src/features/restrictions/policy.current.js');
+    const blocked = {
+      rules: [
+        {
+          id: 'r1',
+          name: 'No YouTube downloads',
+          type: 'block_platform',
+          enabled: true,
+          params: { platform: 'youtube', actions: ['download'] },
+        },
+      ],
+    };
+    setCurrentPolicy(mergePolicy(DEFAULT_POLICY, blocked as never, 1));
+    try {
+      await processors[0]!(bullJob(), 'tok');
+    } finally {
+      setCurrentPolicy(mergePolicy(DEFAULT_POLICY, {}, 1));
+    }
+
+    const failed = jobUpdate.mock.calls
+      .map(([arg]) => (arg as { data: { state?: string; error?: string } }).data)
+      .find((d) => d.state === 'FAILED');
+    expect(failed!.error).toMatch(/^SOURCE_RULE_BLOCKED: /);
+    expect(commitDownload).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it('platform caps apply in the worker: tierPolicyFor receives the host-derived platform', async () => {
+    runCommand.mockResolvedValue({ stdout: '', stderr: '' });
+    await processors[0]!(bullJob(), 'tok').catch(() => undefined);
+    expect(tierPolicySpy).toHaveBeenCalled();
+    expect(tierPolicySpy.mock.calls.every(([, platform]) => platform === 'youtube')).toBe(true);
+  });
+});

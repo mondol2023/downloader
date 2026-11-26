@@ -36,6 +36,7 @@ export async function disconnectRedis(): Promise<void> {
 
 export const keys = {
   extraction: (mediaId: string) => `media:extract:${mediaId}`,
+  eligibilityRefusal: (mediaId: string) => `elig:${mediaId}`,
   extractionLock: (mediaId: string) => `media:extract:lock:${mediaId}`,
   quotaWindow: (subject: string) => `quota:downloads:${subject}`,
   activeJobs: (subject: string) => `quota:active:${subject}`,
