@@ -80,4 +80,6 @@ export const DEFAULT_POLICY: SoftPolicy = {
   },
   tiers: defaultTiers(),
   platforms: defaultPlatforms(),
+  rules: [],
+  disabledBuiltins: [],
 };

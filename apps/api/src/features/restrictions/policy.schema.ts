@@ -1,12 +1,10 @@
 import { z } from 'zod';
-import { TIERS, type Tier, type TierPolicy } from '@media/shared';
+import { TIERS, type BuiltinToggleId, type Rule, type Tier, type TierPolicy } from '@media/shared';
 import type { HARD_FLOOR } from './restrictions.config.js';
+import { PLATFORM_IDS, disabledBuiltinsSchema, hostname, rulesSchema } from './rules.schema.js';
 
-/** Mirrors the values of PLATFORM_BY_SUFFIX in lib/source-url.ts. */
-export const PLATFORM_IDS = [
-  'youtube', 'facebook', 'instagram', 'x', 'tiktok', 'reddit', 'vimeo', 'twitch',
-  'dailymotion', 'soundcloud', 'bilibili', 'pinterest', 'linkedin', 'tumblr',
-] as const;
+export { PLATFORM_IDS };
+
 export type PlatformId = (typeof PLATFORM_IDS)[number];
 
 export type TierSoftKey =
@@ -36,6 +34,10 @@ export interface SoftPolicy {
   };
   tiers: Record<Tier, Pick<TierPolicy, TierSoftKey>>;
   platforms: Record<PlatformId, PlatformPolicy>;
+  /** Admin-managed deny rules; replaced wholesale on publish. */
+  rules: Rule[];
+  /** Built-in limits switched off (their configured values are kept). */
+  disabledBuiltins: BuiltinToggleId[];
 }
 
 export interface EffectivePolicy extends SoftPolicy {
@@ -58,12 +60,6 @@ export type DeepPartial<T> = T extends readonly unknown[]
 // Limits may be Infinity (PRO is unlimited) but never negative or NaN.
 const positive = z.number().positive();
 const nonNegative = z.number().nonnegative();
-const hostname = z
-  .string()
-  .trim()
-  .toLowerCase()
-  .regex(/^(?=.{1,253}$)([a-z0-9-]+\.)+[a-z0-9-]+$/, 'must be a bare hostname such as example.com');
-
 const AUDIO = z.enum(['mp3', 'aac', 'opus', 'flac', 'wav']);
 
 const globalSchema = z
@@ -125,5 +121,7 @@ export const PolicyOverridesSchema = z
     global: globalSchema.optional(),
     tiers: tiersSchema.optional(),
     platforms: platformsSchema.optional(),
+    rules: rulesSchema.optional(),
+    disabledBuiltins: disabledBuiltinsSchema.optional(),
   })
   .strict() as unknown as z.ZodType<DeepPartial<SoftPolicy>>;

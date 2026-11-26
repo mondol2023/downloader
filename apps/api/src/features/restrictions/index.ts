@@ -9,6 +9,7 @@ export {
   type PublicPolicy,
   type SoftPolicy,
 } from './policy.schema.js';
+export { RULES_MAX, disabledBuiltinsSchema, rulesSchema } from './rules.schema.js';
 export { mergePolicy, toPublicPolicy } from './merge.js';
 export {
   assertDownloadsOpen,

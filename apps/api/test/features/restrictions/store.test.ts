@@ -60,6 +60,17 @@ describe('policy store boot', () => {
     expect(store.getPolicy().global.maintenanceMode).toBe(true);
   });
 
+  it('an old snapshot without rules keys boots to empty lists', async () => {
+    await writeFile(snapshotPath, JSON.stringify({ version: 3, overrides: { global: { maxDurationSec: 600 } } }));
+    const prisma = new FakePrisma();
+    prisma.down = true;
+    const store = build(prisma);
+    await store.start();
+    expect(store.getPolicy().global.maxDurationSec).toBe(600);
+    expect(store.getPolicy().rules).toEqual([]);
+    expect(store.getPolicy().disabledBuiltins).toEqual([]);
+  });
+
   it('boot with DB down and no snapshot → DEFAULT_POLICY, never {}', async () => {
     const prisma = new FakePrisma();
     prisma.down = true;

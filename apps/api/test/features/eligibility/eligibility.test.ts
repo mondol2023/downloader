@@ -146,7 +146,7 @@ describe('evaluateEligibility — takedown', () => {
 
 describe('shared eligibility copy', () => {
   it('has copy for every code', () => {
-    expect(INELIGIBLE_CODES).toHaveLength(10);
+    expect(INELIGIBLE_CODES).toHaveLength(11);
     for (const code of INELIGIBLE_CODES) {
       expect(INELIGIBLE_COPY[code].title.length).toBeGreaterThan(0);
       expect(INELIGIBLE_COPY[code].body.length).toBeGreaterThan(0);
